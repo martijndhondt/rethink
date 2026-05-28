@@ -159,28 +159,37 @@ export default class Device extends AABBDevice {
     }
 
     processAABB(buf: Buffer) {
-        // Log every packet — remove once offsets are fully confirmed
+        // Log every packet — remove once remaining_time offset during active wash is confirmed
         console.log(`[F_C__Y___W.A__QEUK] AABB packet (${buf.length} bytes): ${buf.toString('hex')}`)
 
         if (buf.length === 62 && buf[0] === 0x20 && buf[1] === 0xec) {
-            // A-generation 62-byte status packet.
-            // buf[17]: remaining time in minutes (confirmed — decrements 1/min during cycle)
-            // buf[28]: 0x34=52 constant during wash — likely wash temperature in °C (direct encoding)
-            // buf[19]: 0x40=64 constant — likely spin speed (encoding TBD, needs off-state packet)
-            // buf[48]: always buf[17]-1 — appears to be the previous reading; used as initial_time proxy
-            // NOTE: status/error/course/lock offsets not yet confirmed; need an off-state packet.
-            const remaining_time = buf[17]
-            const temp_raw = buf[28]  // direct °C encoding, not an index
-            const prev_remaining = buf[48]  // one reading behind buf[17]
+            // 62-byte A-generation status packet. Confirmed offsets (cross-referenced against
+            // known Cotton/40°C/1400RPM/Normal-rinse/4h-delay settings from live capture):
+            //   [4]  status index  — STATES[3]='Delayed' confirmed
+            //   [12] spin index    — SPINS[10]=1400 RPM confirmed
+            //   [13] temp index    — TEMPERATURES[4]=40°C confirmed
+            //   [14] course        — COURSES[0x01]='Cotton' confirmed
+            //   [16] delay hours remaining (current half) — 4 confirmed
+            //   [17] delay minutes remaining, counts down 1/min — confirmed
+            //   [28] wash cycle duration in minutes — 52 min (initial_time for the wash phase)
+            // Bytes [33..61] mirror [2..30] but [48]=[17]-1 (previous reading, ignored).
+            // TODO: remaining_time offset during active wash (status≠3) — needs wash-phase capture.
+            // TODO: error, door_lock, remote_start, energy, cycles offsets — needs more captures.
+            const status = buf[4]
+            const spin = buf[12]
+            const temp = buf[13]
+            const course = buf[14]
+            const delay_h = buf[16]
+            const delay_m = buf[17]
+            const wash_duration = buf[28]
 
-            const active = remaining_time > 0
-
-            this.publishProperty('power', active ? 'ON' : 'OFF')
-            this.publishProperty('status', active ? 'Washing' : 'Off')
-            this.publishProperty('remaining_time', remaining_time)
-            // initial_time: not yet confirmed; the prev_remaining is 1 min behind so not a reliable proxy.
-            // Publish temp directly in °C (A-gen appears to encode it directly, not via an index).
-            this.publishProperty('temp', temp_raw > 0 ? temp_raw : 'unknown')
+            this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
+            this.publishProperty('status', STATES[status] ?? 'unknown')
+            this.publishProperty('course', COURSES[course] ?? 'unknown')
+            this.publishProperty('spin', SPINS[spin] ?? 'unknown')
+            this.publishProperty('temp', TEMPERATURES[temp] ?? 'unknown')
+            this.publishProperty('remaining_time', delay_h * 60 + delay_m)
+            this.publishProperty('initial_time', wash_duration)
         }
     }
 
