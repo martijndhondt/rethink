@@ -8,6 +8,7 @@ import Dev_2RES1VE600FWC from './devices/2RES1VE600FWC'
 import Y_V8_Y___W_B32QEUK from './devices/Y_V8_Y___W.B32QEUK'
 import F_V8_Y___W_B_2QEUK from './devices/F_V8_Y___W.B_2QEUK'
 import F_V__F___W_B_1QEUK from './devices/F_V__F___W.B_1QEUK'
+import F_C__Y___W_A__QEUK from './devices/F_C__Y___W.A__QEUK'
 import { Device as T1Device } from './thinq1/device'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
@@ -33,6 +34,7 @@ const t2deviceTypes: Record<string, T2Factory> = {
     ['F_V8_Y___W.B_2QEUK']: F_V8_Y___W_B_2QEUK,
     ['F_V__Y___W.B_2QEUK']: F_V8_Y___W_B_2QEUK, // NOTE: we reuse F_V8_Y___W_B_2QEUK as the models appear to be compatible
     ['F_V__F___W.B_1QEUK']: F_V__F___W_B_1QEUK,
+    ['F_C__Y___W.A__QEUK']: F_C__Y___W_A__QEUK,
 }
 
 class Bridge {
