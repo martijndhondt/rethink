@@ -188,13 +188,13 @@ export default class Device extends AABBDevice {
             // Power stays ON during End (status>0); goes OFF only when status=0x00 ('Off').
             // TODO: error byte offset — needs a packet with an active error.
             const status = buf[4]
-            const remain_h = buf[5]  // remaining_time hours (counts down; 0 briefly during load-measuring)
-            const remain_m = buf[6]  // remaining_time minutes
+            const remain_h = buf[5] // remaining_time hours (counts down; 0 briefly during load-measuring)
+            const remain_m = buf[6] // remaining_time minutes
             const initial_h = buf[7] // initial_time hours (fixed for the lifetime of the program)
             const initial_m = buf[8] // initial_time minutes
             const lock_status = buf[9]
             const spin = buf[12]
-            const temp = buf[13]     // 0x00 during rinse (cold water) → publishes 'unknown', expected
+            const temp = buf[13] // 0x00 during rinse (cold water) → publishes 'unknown', expected
             const course = buf[14]
             const delay_h = buf[16]
             const delay_m = buf[17]
