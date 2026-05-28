@@ -158,8 +158,14 @@ export default class Device extends AABBDevice {
         // 0xEC = 62-byte dual-section status packet (normal polling response)
         // 0xEB = 32-byte single-section compact packet (sent after commands/reconnect)
         // Both share the same field layout in their first section.
+        // 0xE2 = 32-byte end-of-cycle alert packet: floods at ~2s intervals during End
+        //        state. Has different field layout ([4]≠status, [5][6]≠time); [12][13][14]
+        //        and [25] coincidentally sit at the same offsets but [4]=0x04='Measuring'
+        //        would be wrong to publish. Silently ignored.
         const isEC = buf.length === 62 && buf[0] === 0x20 && buf[1] === 0xec
         const isEB = buf.length === 32 && buf[0] === 0x20 && buf[1] === 0xeb
+        const isE2 = buf.length === 32 && buf[0] === 0x20 && buf[1] === 0xe2
+        if (isE2) return
 
         if (isEC || isEB) {
             // Confirmed offsets (A-gen status packet — both 0xEC and 0xEB):
@@ -175,9 +181,11 @@ export default class Device extends AABBDevice {
             //   [17]    delay minutes    — counts down 1/min confirmed
             //   [22]    0x06 constant    — protocol marker
             //   [23]    status echo      — mirrors buf[4], confirmed across Delayed/Washing/Rinsing
-            //   [25]    tub_clean        — 9 confirmed (NOTE: NOT buf[26])
+            //   [25]    tub_clean        — 9 during wash; increments to 10 on End packet confirmed (NOTE: NOT buf[26])
             // The 62-byte 0xEC packet has a second half [33..61] mirroring [2..30]
             // with [48]=[17]-1 (previous reading, ignored).
+            // End state: status=0x0A, spin/temp/course all go to 0x00 → 'unknown', remaining=0, tub_clean++.
+            // Power stays ON during End (status>0); goes OFF only when status=0x00 ('Off').
             // TODO: error byte offset — needs a packet with an active error.
             const status = buf[4]
             const remain_h = buf[5]  // remaining_time hours (counts down; 0 briefly during load-measuring)
