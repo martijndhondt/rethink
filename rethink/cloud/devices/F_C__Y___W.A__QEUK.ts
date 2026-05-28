@@ -155,8 +155,14 @@ export default class Device extends AABBDevice {
         // Log every packet — remove once error/energy offsets are confirmed
         console.log(`[F_C__Y___W.A__QEUK] AABB packet (${buf.length} bytes): ${buf.toString('hex')}`)
 
-        if (buf.length === 62 && buf[0] === 0x20 && buf[1] === 0xec) {
-            // Confirmed offsets (A-gen 62-byte status packet):
+        // 0xEC = 62-byte dual-section status packet (normal polling response)
+        // 0xEB = 32-byte single-section compact packet (sent after commands/reconnect)
+        // Both share the same field layout in their first section.
+        const isEC = buf.length === 62 && buf[0] === 0x20 && buf[1] === 0xec
+        const isEB = buf.length === 32 && buf[0] === 0x20 && buf[1] === 0xeb
+
+        if (isEC || isEB) {
+            // Confirmed offsets (A-gen status packet — both 0xEC and 0xEB):
             //   [4]     status           — STATES[3]='Delayed' confirmed
             //   [5][6]  remaining_time   — counts down during wash; equals initial when delayed
             //                            NOTE: shows 0 briefly at wash start (load-measuring phase)
@@ -167,8 +173,11 @@ export default class Device extends AABBDevice {
             //   [14]    course           — COURSES[0x01]='Cotton' confirmed
             //   [16]    delay hours      — 4 confirmed
             //   [17]    delay minutes    — counts down 1/min confirmed
-            //   [26]    tub_clean        — 9 confirmed
-            // Bytes [33..61] mirror [2..30] with [48]=[17]-1 (previous reading, ignored).
+            //   [22]    0x06 constant    — protocol marker
+            //   [23]    status echo      — mirrors buf[4], confirmed across Delayed/Washing/Rinsing
+            //   [25]    tub_clean        — 9 confirmed (NOTE: NOT buf[26])
+            // The 62-byte 0xEC packet has a second half [33..61] mirroring [2..30]
+            // with [48]=[17]-1 (previous reading, ignored).
             // TODO: error byte offset — needs a packet with an active error.
             const status = buf[4]
             const remain_h = buf[5]  // remaining_time hours (counts down; 0 briefly during load-measuring)
@@ -177,11 +186,11 @@ export default class Device extends AABBDevice {
             const initial_m = buf[8] // initial_time minutes
             const lock_status = buf[9]
             const spin = buf[12]
-            const temp = buf[13]
+            const temp = buf[13]     // 0x00 during rinse (cold water) → publishes 'unknown', expected
             const course = buf[14]
             const delay_h = buf[16]
             const delay_m = buf[17]
-            const tub_clean = buf[26]
+            const tub_clean = buf[25] // confirmed at buf[25], not buf[26]
 
             this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
             this.publishProperty('status', STATES[status] ?? 'unknown')
