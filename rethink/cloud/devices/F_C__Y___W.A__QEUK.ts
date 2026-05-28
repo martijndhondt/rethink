@@ -158,8 +158,9 @@ export default class Device extends AABBDevice {
         if (buf.length === 62 && buf[0] === 0x20 && buf[1] === 0xec) {
             // Confirmed offsets (A-gen 62-byte status packet):
             //   [4]     status           — STATES[3]='Delayed' confirmed
-            //   [5][6]  initial_time     — 0x01 0x0C = 1h12m = 72 min confirmed
-            //   [7][8]  remaining_time   — same as initial when delayed; counts down during wash
+            //   [5][6]  remaining_time   — counts down during wash; equals initial when delayed
+            //                            NOTE: shows 0 briefly at wash start (load-measuring phase)
+            //   [7][8]  initial_time     — fixed total program duration (72 min confirmed, stays constant)
             //   [9]     lock_status      — bit1=remote_start, bit6=door_lock(inverted); remote_start=off confirmed
             //   [12]    spin index       — SPINS[10]=1400 RPM confirmed
             //   [13]    temp index       — TEMPERATURES[4]=40°C confirmed
@@ -170,10 +171,10 @@ export default class Device extends AABBDevice {
             // Bytes [33..61] mirror [2..30] with [48]=[17]-1 (previous reading, ignored).
             // TODO: error byte offset — needs a packet with an active error.
             const status = buf[4]
-            const initial_h = buf[5]
-            const initial_m = buf[6]
-            const remain_h = buf[7]
-            const remain_m = buf[8]
+            const remain_h = buf[5]  // remaining_time hours (counts down; 0 briefly during load-measuring)
+            const remain_m = buf[6]  // remaining_time minutes
+            const initial_h = buf[7] // initial_time hours (fixed for the lifetime of the program)
+            const initial_m = buf[8] // initial_time minutes
             const lock_status = buf[9]
             const spin = buf[12]
             const temp = buf[13]
@@ -187,8 +188,8 @@ export default class Device extends AABBDevice {
             this.publishProperty('course', COURSES[course] ?? 'unknown')
             this.publishProperty('spin', SPINS[spin] ?? 'unknown')
             this.publishProperty('temp', TEMPERATURES[temp] ?? 'unknown')
-            this.publishProperty('initial_time', initial_h * 60 + initial_m)
             this.publishProperty('remaining_time', remain_h * 60 + remain_m)
+            this.publishProperty('initial_time', initial_h * 60 + initial_m)
             this.publishProperty('delay_remaining', delay_h * 60 + delay_m)
             this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
             this.publishProperty('door_lock', !(lock_status & 0x40) ? 'ON' : 'OFF')
