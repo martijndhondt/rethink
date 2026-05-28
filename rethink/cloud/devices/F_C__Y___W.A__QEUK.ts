@@ -159,63 +159,28 @@ export default class Device extends AABBDevice {
     }
 
     processAABB(buf: Buffer) {
-        // Log every packet so its format can be identified and offsets confirmed.
+        // Log every packet — remove once offsets are fully confirmed
         console.log(`[F_C__Y___W.A__QEUK] AABB packet (${buf.length} bytes): ${buf.toString('hex')}`)
 
-        if (buf.length === 80 && buf[0] === 0x20) {
-            // 80-byte format — same layout as F_V__F___W.B_1QEUK
-            const status = buf[43]
-            const time_remain = buf[44] * 60 + buf[45]
-            const time_initial = buf[46] * 60 + buf[47]
-            const course = buf[48]
-            const error = buf[49]
-            const temp = buf[52]
-            const spin = buf[51]
-            const drying_mode = buf[54]
-            const lock_status = buf[58]
-            const cycles = buf[64]
-            const energy = buf[71] * 256 + buf[72]
+        if (buf.length === 62 && buf[0] === 0x20 && buf[1] === 0xec) {
+            // A-generation 62-byte status packet.
+            // buf[17]: remaining time in minutes (confirmed — decrements 1/min during cycle)
+            // buf[28]: 0x34=52 constant during wash — likely wash temperature in °C (direct encoding)
+            // buf[19]: 0x40=64 constant — likely spin speed (encoding TBD, needs off-state packet)
+            // buf[48]: always buf[17]-1 — appears to be the previous reading; used as initial_time proxy
+            // NOTE: status/error/course/lock offsets not yet confirmed; need an off-state packet.
+            const remaining_time = buf[17]
+            const temp_raw = buf[28]  // direct °C encoding, not an index
+            const prev_remaining = buf[48]  // one reading behind buf[17]
 
-            this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
-            this.publishProperty('error_message', ERRORS[error] ?? 'unknown')
-            this.publishProperty('error', error ? 'ON' : 'OFF')
-            this.publishProperty('status', STATES[status] ?? 'unknown')
-            this.publishProperty('course', COURSES[course] ?? 'unknown')
-            this.publishProperty('spin', SPINS[spin] ?? 'unknown')
-            this.publishProperty('temp', TEMPERATURES[temp] ?? 'unknown')
-            this.publishProperty('drying_mode', DRYING_MODES[drying_mode] ?? 'unknown')
-            this.publishProperty('cycles', cycles)
-            this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
-            this.publishProperty('door_lock', !(lock_status & 0x40) ? 'ON' : 'OFF') // inverted logic, off=locked
-            this.publishProperty('initial_time', time_initial)
-            this.publishProperty('remaining_time', time_remain)
-            this.publishProperty('energy', energy)
-        } else if (buf.length === 53 && buf[0] === 0x20) {
-            // 53-byte format — same layout as Y_V8_Y___W.B32QEUK
-            const status = buf[15]
-            const time_remain = buf[16] * 60 + buf[17]
-            const time_initial = buf[18] * 60 + buf[19]
-            const course = buf[20]
-            const error = buf[21]
-            const spin = buf[24]
-            const temp = buf[25]
-            const lock_status = buf[30]
-            const cycles = buf[36]
-            const energy = buf[47] * 256 + buf[48]
+            const active = remaining_time > 0
 
-            this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
-            this.publishProperty('error_message', ERRORS[error] ?? 'unknown')
-            this.publishProperty('error', error ? 'ON' : 'OFF')
-            this.publishProperty('status', STATES[status] ?? 'unknown')
-            this.publishProperty('course', COURSES[course] ?? 'unknown')
-            this.publishProperty('spin', SPINS[spin] ?? 'unknown')
-            this.publishProperty('temp', TEMPERATURES[temp] ?? 'unknown')
-            this.publishProperty('cycles', cycles)
-            this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
-            this.publishProperty('door_lock', !(lock_status & 0x40) ? 'ON' : 'OFF') // inverted logic, off=locked
-            this.publishProperty('initial_time', time_initial)
-            this.publishProperty('remaining_time', time_remain)
-            this.publishProperty('energy', energy)
+            this.publishProperty('power', active ? 'ON' : 'OFF')
+            this.publishProperty('status', active ? 'Washing' : 'Off')
+            this.publishProperty('remaining_time', remaining_time)
+            // initial_time: not yet confirmed; the prev_remaining is 1 min behind so not a reliable proxy.
+            // Publish temp directly in °C (A-gen appears to encode it directly, not via an index).
+            this.publishProperty('temp', temp_raw > 0 ? temp_raw : 'unknown')
         }
     }
 
