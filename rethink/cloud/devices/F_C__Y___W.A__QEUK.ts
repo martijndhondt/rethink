@@ -4,12 +4,12 @@ import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import AABBDevice from './aabb_device'
-import { ERRORS, STATES, COURSES, TEMPERATURES, SPINS, DRYING_MODES } from './washer_common'
+import { ERRORS, STATES, COURSES, TEMPERATURES, SPINS } from './washer_common'
 
 // F_C__Y___W.A__QEUK — LG front-loading washer, A-generation UK
-// Packet format not yet confirmed. The device logs every received packet in hex;
-// capture those lines and compare against the B-generation formats to determine
-// which byte offsets apply. Update processAABB() once confirmed.
+// 62-byte AABB status packet (0x20 0xEC subtype).
+// Offsets confirmed from live captures against known settings:
+//   Cotton/40°C/1400RPM/Normal-rinse, delayed-start 4h, tub-clean-counter=9, remote-start=off.
 export default class Device extends AABBDevice {
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -95,20 +95,6 @@ export default class Device extends AABBDevice {
                         unit_of_measurement: 'RPM',
                         value_template: "{{ value if value | is_number else 'None' }}",
                     },
-                    drying_mode: {
-                        platform: 'sensor',
-                        unique_id: '$deviceid-drying-mode',
-                        state_topic: '$this/drying_mode',
-                        name: 'Drying mode',
-                        icon: 'mdi:tumble-dryer',
-                    },
-                    cycles: {
-                        platform: 'sensor',
-                        unique_id: '$deviceid-cycles',
-                        state_topic: '$this/cycles',
-                        name: 'Cycle count',
-                        icon: 'mdi:counter',
-                    },
                     remote_start: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-remote_start',
@@ -123,15 +109,13 @@ export default class Device extends AABBDevice {
                         name: 'Door lock',
                         device_class: 'lock',
                     },
-                    energy: {
+                    tub_clean: {
                         platform: 'sensor',
-                        unique_id: '$deviceid-energy',
-                        state_topic: '$this/energy',
-                        name: 'Energy',
-                        icon: 'mdi:lightning-bolt',
-                        device_class: 'energy',
-                        state_class: 'total_increasing',
-                        unit_of_measurement: 'Wh',
+                        unique_id: '$deviceid-tub-clean',
+                        state_topic: '$this/tub_clean',
+                        name: 'Tub clean counter',
+                        icon: 'mdi:washing-machine-alert',
+                        entity_category: 'diagnostic',
                     },
                     initial_time: {
                         platform: 'sensor',
@@ -149,6 +133,15 @@ export default class Device extends AABBDevice {
                         unit_of_measurement: 'min',
                         name: 'Remaining time',
                     },
+                    delay_remaining: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-delay_remaining',
+                        state_topic: '$this/delay_remaining',
+                        device_class: 'duration',
+                        unit_of_measurement: 'min',
+                        name: 'Delay remaining',
+                        icon: 'mdi:clock-start',
+                    },
                 },
             }),
         )
@@ -159,37 +152,47 @@ export default class Device extends AABBDevice {
     }
 
     processAABB(buf: Buffer) {
-        // Log every packet — remove once remaining_time offset during active wash is confirmed
+        // Log every packet — remove once error/energy offsets are confirmed
         console.log(`[F_C__Y___W.A__QEUK] AABB packet (${buf.length} bytes): ${buf.toString('hex')}`)
 
         if (buf.length === 62 && buf[0] === 0x20 && buf[1] === 0xec) {
-            // 62-byte A-generation status packet. Confirmed offsets (cross-referenced against
-            // known Cotton/40°C/1400RPM/Normal-rinse/4h-delay settings from live capture):
-            //   [4]  status index  — STATES[3]='Delayed' confirmed
-            //   [12] spin index    — SPINS[10]=1400 RPM confirmed
-            //   [13] temp index    — TEMPERATURES[4]=40°C confirmed
-            //   [14] course        — COURSES[0x01]='Cotton' confirmed
-            //   [16] delay hours remaining (current half) — 4 confirmed
-            //   [17] delay minutes remaining, counts down 1/min — confirmed
-            //   [28] wash cycle duration in minutes — 52 min (initial_time for the wash phase)
-            // Bytes [33..61] mirror [2..30] but [48]=[17]-1 (previous reading, ignored).
-            // TODO: remaining_time offset during active wash (status≠3) — needs wash-phase capture.
-            // TODO: error, door_lock, remote_start, energy, cycles offsets — needs more captures.
+            // Confirmed offsets (A-gen 62-byte status packet):
+            //   [4]     status           — STATES[3]='Delayed' confirmed
+            //   [5][6]  initial_time     — 0x01 0x0C = 1h12m = 72 min confirmed
+            //   [7][8]  remaining_time   — same as initial when delayed; counts down during wash
+            //   [9]     lock_status      — bit1=remote_start, bit6=door_lock(inverted); remote_start=off confirmed
+            //   [12]    spin index       — SPINS[10]=1400 RPM confirmed
+            //   [13]    temp index       — TEMPERATURES[4]=40°C confirmed
+            //   [14]    course           — COURSES[0x01]='Cotton' confirmed
+            //   [16]    delay hours      — 4 confirmed
+            //   [17]    delay minutes    — counts down 1/min confirmed
+            //   [26]    tub_clean        — 9 confirmed
+            // Bytes [33..61] mirror [2..30] with [48]=[17]-1 (previous reading, ignored).
+            // TODO: error byte offset — needs a packet with an active error.
             const status = buf[4]
+            const initial_h = buf[5]
+            const initial_m = buf[6]
+            const remain_h = buf[7]
+            const remain_m = buf[8]
+            const lock_status = buf[9]
             const spin = buf[12]
             const temp = buf[13]
             const course = buf[14]
             const delay_h = buf[16]
             const delay_m = buf[17]
-            const wash_duration = buf[28]
+            const tub_clean = buf[26]
 
             this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
             this.publishProperty('status', STATES[status] ?? 'unknown')
             this.publishProperty('course', COURSES[course] ?? 'unknown')
             this.publishProperty('spin', SPINS[spin] ?? 'unknown')
             this.publishProperty('temp', TEMPERATURES[temp] ?? 'unknown')
-            this.publishProperty('remaining_time', delay_h * 60 + delay_m)
-            this.publishProperty('initial_time', wash_duration)
+            this.publishProperty('initial_time', initial_h * 60 + initial_m)
+            this.publishProperty('remaining_time', remain_h * 60 + remain_m)
+            this.publishProperty('delay_remaining', delay_h * 60 + delay_m)
+            this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
+            this.publishProperty('door_lock', !(lock_status & 0x40) ? 'ON' : 'OFF')
+            this.publishProperty('tub_clean', tub_clean)
         }
     }
 
