@@ -167,7 +167,7 @@ export default class Device extends AABBDevice {
             //   [5][6]  remaining_time   — counts down during wash; equals initial when delayed
             //                            NOTE: shows 0 briefly at wash start (load-measuring phase)
             //   [7][8]  initial_time     — fixed total program duration (72 min confirmed, stays constant)
-            //   [9]     lock_status      — bit1=remote_start, bit6=door_lock(inverted); remote_start=off confirmed
+            //   [9]     lock_status      — bit1=remote_start (ON when set), bit6=door_lock (ON=unlocked when set)
             //   [12]    spin index       — SPINS[10]=1400 RPM confirmed
             //   [13]    temp index       — TEMPERATURES[4]=40°C confirmed
             //   [14]    course           — COURSES[0x01]='Cotton' confirmed
@@ -201,7 +201,7 @@ export default class Device extends AABBDevice {
             this.publishProperty('initial_time', initial_h * 60 + initial_m)
             this.publishProperty('delay_remaining', delay_h * 60 + delay_m)
             this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
-            this.publishProperty('door_lock', !(lock_status & 0x40) ? 'ON' : 'OFF')
+            this.publishProperty('door_lock', lock_status & 0x40 ? 'ON' : 'OFF')
             this.publishProperty('tub_clean', tub_clean)
         }
     }
