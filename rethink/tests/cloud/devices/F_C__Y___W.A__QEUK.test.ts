@@ -1,0 +1,256 @@
+import { describe, test } from 'node:test'
+import assert from 'node:assert/strict'
+import DUT from '@/cloud/devices/F_C__Y___W.A__QEUK'
+import type { Metadata } from '@/cloud/thinq'
+import { MockHAConnection, MockThinq2Device, buf, hex } from '@/tests/helpers/mocks'
+
+const DEVICE_ID = 'test-id'
+const MODEL_ID = 'F_C__Y___W.A__QEUK'
+const META: Metadata = { modelId: MODEL_ID, modelName: 'F_C__Y___W.A__QEUK', swVersion: '1.0.0' }
+
+// Real packet captures from an F_C__Y___W.A__QEUK washer (A-gen UK front-loader).
+// Frame format: AA <total_len> 20 EC <payload...> <checksum> BB (62-byte 0xEC inner block = 66 bytes total).
+// Confirmed offsets — see device file header.
+
+// Real capture: Cotton/60°C/1400 RPM, 104 min remaining, 121 min initial, delay=0, tub_clean=10.
+const SAMPLE_WASHING_EC = buf(
+    'AA4220EC001C06012C02010100030A0601000000004000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
+)
+
+// Synthetic packet: Cotton/40°C/1400 RPM delayed-start, delay=4h, 72 min program, tub_clean=9.
+const SAMPLE_DELAYED_EC = buf(
+    'AA4220EC001C03004800480100000A04010004000000000006030009003400000500001C03004700480100000A040100040000000000060300090034000005009BBB',
+)
+
+// Real capture: Cotton/60°C/1400 RPM, 3 min remaining (final spin), tub_clean=10.
+const SAMPLE_SPINNING_EC = buf(
+    'AA4220EC001C08000302010100000A0000000000004000000608000A003400000500001C08000202010100000A0000000000004000000608000A003400000500D6BB',
+)
+
+// Real capture: End state — status=End, remaining=0, spin/temp/course all cleared, tub_clean=10.
+const SAMPLE_END_EC = buf(
+    'AA4220EC001C0A0000020101000000000000000000400000060A000A003400000500001C0A0000020101000000000000000000000000060A000A00340000050067BB',
+)
+
+// Real capture: Off state — machine powered off after cycle, tub_clean=10.
+const SAMPLE_OFF_EC = buf(
+    'AA4220EC001C000000020101000000000000000000000000030A000A003400000500001C0000000201010000000000000000000000000300000A0034000005009BBB',
+)
+
+// Real capture: 0xE2 end-of-cycle alert packet — floods at ~2s intervals at End.
+// Must be silently ignored (different field layout from 0xEC/0xEB).
+const SAMPLE_E2_IGNORED = buf('AA2420E2091C04032603260100030A0601000000400000000604000A003400000500B8BB')
+
+// Synthetic: 0xEB compact status packet (32-byte, sent after commands/reconnect).
+// Same field layout as the first section of 0xEC. Cotton/60°C/1400 RPM, 50 min remaining, tub_clean=10.
+const SAMPLE_WASHING_EB = buf('AA2420EB001C06003200480100000A0601000000000000000606000A003400000500C4BB')
+
+// Real captures: 0xD8 door-state packets (3-byte, flood while machine is on with no program).
+const SAMPLE_DOOR_CLOSED = buf('AA0720D800FCBB') // buf[2]=0x00 → closed/locked
+const SAMPLE_DOOR_OPEN = buf('AA0720D80BE1BB') // buf[2]=0x0B → open/unlocked
+
+// Expected outgoing packets emitted by the device file.
+const WRITE_INIT = 'AA0EF0ED1121010000001800B5BB'
+const WRITE_POWER_ON = 'AA08F02A010098BB'
+const WRITE_POWER_OFF = 'AA09F0240101009CBB'
+const WRITE_PAUSE = 'AA09F02404010099BB'
+const WRITE_START = 'AA09F02405010098BB'
+
+function makeDevice() {
+    const ha = new MockHAConnection()
+    const thinq = new MockThinq2Device(DEVICE_ID, META)
+    const dev = new DUT(ha.asConnection(), thinq, META)
+    return { ha, thinq, dev }
+}
+
+describe(MODEL_ID, () => {
+    test('config exposes expected components on construction', () => {
+        const { ha } = makeDevice()
+        const cfg = ha.devices[DEVICE_ID].config
+        assert.ok(cfg, 'config published')
+        const components = cfg!.components as Record<string, Record<string, unknown>>
+        for (const c of [
+            'power',
+            'start',
+            'pause',
+            'status',
+            'error',
+            'error_message',
+            'course',
+            'temp',
+            'spin',
+            'remote_start',
+            'door_lock',
+            'tub_clean',
+            'initial_time',
+            'remaining_time',
+            'delay_remaining',
+        ]) {
+            assert.ok(components[c], `component ${c} present`)
+        }
+        assert.ok((components.status.options as string[]).includes('Washing'))
+        assert.ok((components.status.options as string[]).includes('Error'))
+    })
+
+    test('delayed-start state decodes status, course, spin, temp, times and delay', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_DELAYED_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.power, 'ON')
+        assert.equal(props.status, 'Delayed')
+        assert.equal(props.course, 'Cotton')
+        assert.equal(props.spin, 1400)
+        assert.equal(props.temp, 40)
+        assert.equal(props.remaining_time, 72) // 0h 72m
+        assert.equal(props.initial_time, 72)
+        assert.equal(props.delay_remaining, 4 * 60) // 4h 0m
+        assert.equal(props.remote_start, 'OFF')
+        assert.equal(props.tub_clean, 9)
+    })
+
+    test('washing state decodes status, course, spin, temp, times (real capture)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.power, 'ON')
+        assert.equal(props.status, 'Washing')
+        assert.equal(props.course, 'Cotton')
+        assert.equal(props.spin, 1400)
+        assert.equal(props.temp, 60)
+        assert.equal(props.remaining_time, 1 * 60 + 44) // 1h 44m = 104 min
+        assert.equal(props.initial_time, 2 * 60 + 1) // 2h 1m = 121 min
+        assert.equal(props.delay_remaining, 0)
+        assert.equal(props.remote_start, 'OFF')
+        assert.equal(props.tub_clean, 10)
+    })
+
+    test('spinning state decodes status and remaining time', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_SPINNING_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.status, 'Spinning')
+        assert.equal(props.remaining_time, 3)
+        assert.equal(props.spin, 1400) // spin index still populated during final spin
+    })
+
+    test('end state: status=End, power still ON, spin/temp/course cleared', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_END_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.status, 'End')
+        assert.equal(props.power, 'ON') // power stays ON until status goes to 0
+        assert.equal(props.remaining_time, 0)
+        assert.equal(props.spin, 'unknown')
+        assert.equal(props.temp, 'unknown')
+        assert.equal(props.course, 'unknown')
+        assert.equal(props.tub_clean, 10)
+    })
+
+    test('off state: power=OFF, status=Off', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_OFF_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.power, 'OFF')
+        assert.equal(props.status, 'Off')
+    })
+
+    test('0xEB compact packet is parsed identically to 0xEC first section', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EB)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.status, 'Washing')
+        assert.equal(props.remaining_time, 50)
+        assert.equal(props.spin, 1400)
+        assert.equal(props.temp, 60)
+        assert.equal(props.tub_clean, 10)
+    })
+
+    test('0xE2 end-of-cycle alert packet is silently ignored', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC) // establish a known state
+        const before = { ...ha.devices[DEVICE_ID].properties }
+        thinq.emit('data', SAMPLE_E2_IGNORED) // must not alter any property
+        assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+    })
+
+    test('0xD8 door-closed packet publishes door_lock=OFF (locked)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_DOOR_CLOSED)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
+    })
+
+    test('0xD8 door-open packet publishes door_lock=ON (unlocked)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_DOOR_OPEN)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+    })
+
+    test('door_lock toggles correctly across open/close sequence', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_DOOR_CLOSED)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
+        thinq.emit('data', SAMPLE_DOOR_OPEN)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        thinq.emit('data', SAMPLE_DOOR_CLOSED)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
+    })
+
+    test('frames not matching the AA..BB envelope are ignored', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        const before = { ...ha.devices[DEVICE_ID].properties }
+        thinq.emit('data', buf('001122')) // no AA/BB wrapper
+        assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+    })
+
+    test('frames with unrecognised inner length are ignored', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        const before = { ...ha.devices[DEVICE_ID].properties }
+        thinq.emit('data', buf('AA0820EC010203040506BB')) // valid envelope, wrong payload length
+        assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+    })
+
+    test('start() sends the F0ED initialisation packet', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.start()
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(hex(thinq.outbox[0]), WRITE_INIT)
+    })
+
+    test('HA write power=ON', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.setProperty('power', 'ON')
+        assert.equal(hex(thinq.outbox[0]), WRITE_POWER_ON)
+    })
+
+    test('HA write power=OFF', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.setProperty('power', 'OFF')
+        assert.equal(hex(thinq.outbox[0]), WRITE_POWER_OFF)
+    })
+
+    test('HA write pause button', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.setProperty('pause', '')
+        assert.equal(hex(thinq.outbox[0]), WRITE_PAUSE)
+    })
+
+    test('HA write start button with default payload', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.setProperty('start', '')
+        assert.equal(hex(thinq.outbox[0]), WRITE_START)
+    })
+
+    test('HA write to unknown property emits no packet', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.setProperty('does-not-exist', 'whatever')
+        assert.equal(thinq.outbox.length, 0)
+    })
+})
