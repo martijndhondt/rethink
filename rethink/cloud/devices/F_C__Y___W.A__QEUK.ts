@@ -109,6 +109,13 @@ export default class Device extends AABBDevice {
                         name: 'Door lock',
                         device_class: 'lock',
                     },
+                    steam: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-steam',
+                        state_topic: '$this/steam',
+                        name: 'Steam',
+                        icon: 'mdi:weather-fog',
+                    },
                     tub_clean: {
                         platform: 'sensor',
                         unique_id: '$deviceid-tub-clean',
@@ -190,7 +197,9 @@ export default class Device extends AABBDevice {
             //   [14]    course           — COURSES[0x01]='Cotton' confirmed
             //   [16]    delay hours      — 4 confirmed
             //   [17]    delay minutes    — counts down 1/min confirmed
-            //   [22]    0x06 constant    — protocol marker
+            //   [18]    bit7=steam       — 0x80=steam ON; confirmed via steam-toggle experiment
+            //   [19]    bit6=delay_act   — 0x40 while delayed-start is counting down (Measuring/Delayed states)
+            //   [22]    unknown          — varies; 0x03 in Off/Washing, 0x06 in Delayed/Spinning/End
             //   [23]    status echo      — mirrors buf[4], confirmed across Delayed/Washing/Rinsing
             //   [25]    tub_clean        — 9 during wash; increments to 10 on End packet confirmed (NOTE: NOT buf[26])
             // The 62-byte 0xEC packet has a second half [33..61] mirroring [2..30]
@@ -209,6 +218,7 @@ export default class Device extends AABBDevice {
             const course = buf[14]
             const delay_h = buf[16]
             const delay_m = buf[17]
+            const steam = buf[18] & 0x80 // bit7: 0x80=steam ON
             const tub_clean = buf[25] // confirmed at buf[25], not buf[26]
 
             this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
@@ -220,6 +230,7 @@ export default class Device extends AABBDevice {
             this.publishProperty('initial_time', initial_h * 60 + initial_m)
             this.publishProperty('delay_remaining', delay_h * 60 + delay_m)
             this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
+            this.publishProperty('steam', steam ? 'ON' : 'OFF')
             this.publishProperty('tub_clean', tub_clean)
         }
     }

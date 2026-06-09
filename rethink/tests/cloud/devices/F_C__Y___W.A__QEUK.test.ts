@@ -13,8 +13,15 @@ const META: Metadata = { modelId: MODEL_ID, modelName: 'F_C__Y___W.A__QEUK', swV
 // Confirmed offsets — see device file header.
 
 // Real capture: Cotton/60°C/1400 RPM, 104 min remaining, 121 min initial, delay=0, tub_clean=10.
+// buf[18]=0x00 → steam=OFF.
 const SAMPLE_WASHING_EC = buf(
     'AA4220EC001C06012C02010100030A0601000000004000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
+)
+
+// Derived from SAMPLE_WASHING_EC with raw[20] (= buf[18]) changed 0x00→0x80 to set the steam flag.
+// All other fields identical: Cotton/60°C/1400 RPM, 104 min remaining, 121 min initial, delay=0.
+const SAMPLE_STEAM_ON_EC = buf(
+    'AA4220EC001C06012C02010100030A0601000000804000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
 )
 
 // Synthetic packet: Cotton/40°C/1400 RPM delayed-start, delay=4h, 72 min program, tub_clean=9.
@@ -81,6 +88,7 @@ describe(MODEL_ID, () => {
             'spin',
             'remote_start',
             'door_lock',
+            'steam',
             'tub_clean',
             'initial_time',
             'remaining_time',
@@ -121,6 +129,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.initial_time, 2 * 60 + 1) // 2h 1m = 121 min
         assert.equal(props.delay_remaining, 0)
         assert.equal(props.remote_start, 'OFF')
+        assert.equal(props.steam, 'OFF')
         assert.equal(props.tub_clean, 10)
     })
 
@@ -144,6 +153,32 @@ describe(MODEL_ID, () => {
         assert.equal(props.temp, 'unknown')
         assert.equal(props.course, 'unknown')
         assert.equal(props.tub_clean, 10)
+    })
+
+    test('steam=OFF when buf[18] bit7 is clear (standard washing packet)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.steam, 'OFF')
+    })
+
+    test('steam=ON when buf[18] bit7 is set', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_STEAM_ON_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.steam, 'ON')
+        // All other fields identical to SAMPLE_WASHING_EC
+        assert.equal(props.status, 'Washing')
+        assert.equal(props.temp, 60)
+        assert.equal(props.spin, 1400)
+        assert.equal(props.remaining_time, 104)
+    })
+
+    test('steam toggles correctly across ON→OFF sequence', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_STEAM_ON_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.steam, 'ON')
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.steam, 'OFF')
     })
 
     test('off state: power=OFF, status=Off', () => {
