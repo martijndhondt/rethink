@@ -198,7 +198,7 @@ export default class Device extends AABBDevice {
             //   [16]    delay hours      — 4 confirmed
             //   [17]    delay minutes    — counts down 1/min confirmed
             //   [18]    bit7=steam       — 0x80=steam ON; confirmed via steam-toggle experiment
-            //   [19]    bit6=delay_act   — 0x40 while delayed-start is counting down (Measuring/Delayed states)
+            //   [19]    bit6=?           — 0x40 during Washing/Spinning/End; 0x00 in Off/Delayed-waiting; meaning unconfirmed
             //   [22]    unknown          — varies; 0x03 in Off/Washing, 0x06 in Delayed/Spinning/End
             //   [23]    status echo      — mirrors buf[4], confirmed across Delayed/Washing/Rinsing
             //   [25]    tub_clean        — 9 during wash; increments to 10 on End packet confirmed (NOTE: NOT buf[26])
