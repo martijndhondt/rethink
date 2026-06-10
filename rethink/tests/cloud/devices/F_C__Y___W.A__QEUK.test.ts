@@ -96,6 +96,8 @@ describe(MODEL_ID, () => {
             'door_lock',
             'steam',
             'child_lock',
+            'active',
+            'pre_state',
             'tub_clean',
             'initial_time',
             'remaining_time',
@@ -120,6 +122,8 @@ describe(MODEL_ID, () => {
         assert.equal(props.initial_time, 72)
         assert.equal(props.delay_remaining, 4 * 60) // 4h 0m
         assert.equal(props.remote_start, 'OFF')
+        assert.equal(props.active, 'OFF') // synthetic packet: start not yet pressed
+        assert.equal(props.pre_state, 'Delayed')
         assert.equal(props.tub_clean, 9)
     })
 
@@ -137,7 +141,9 @@ describe(MODEL_ID, () => {
         assert.equal(props.delay_remaining, 0)
         assert.equal(props.remote_start, 'OFF')
         assert.equal(props.steam, 'OFF')
+        assert.equal(props.active, 'ON')
         assert.equal(props.child_lock, 'OFF')
+        assert.equal(props.pre_state, 'Washing')
         assert.equal(props.tub_clean, 10)
     })
 
@@ -160,6 +166,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.spin, 'unknown')
         assert.equal(props.temp, 'unknown')
         assert.equal(props.course, 'unknown')
+        assert.equal(props.pre_state, 'End')
         assert.equal(props.tub_clean, 10)
     })
 
@@ -215,12 +222,14 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF')
     })
 
-    test('off state: power=OFF, status=Off', () => {
+    test('off state: power=OFF, status=Off, pre_state retains last run state (End)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_OFF_EC)
         const props = ha.devices[DEVICE_ID].properties
         assert.equal(props.power, 'OFF')
         assert.equal(props.status, 'Off')
+        assert.equal(props.active, 'OFF')
+        assert.equal(props.pre_state, 'End') // buf[23] retains End even after power-off
     })
 
     test('0xEB compact packet is parsed identically to 0xEC first section', () => {

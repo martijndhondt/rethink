@@ -125,6 +125,22 @@ export default class Device extends AABBDevice {
                         device_class: 'lock',
                         entity_category: 'diagnostic',
                     },
+                    active: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-active',
+                        state_topic: '$this/active',
+                        name: 'Active',
+                        icon: 'mdi:washing-machine',
+                    },
+                    pre_state: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-pre_state',
+                        state_topic: '$this/pre_state',
+                        name: 'Pre state',
+                        icon: 'mdi:state-machine',
+                        device_class: 'enum',
+                        options: STATES.filter((a) => a !== undefined),
+                    },
                     tub_clean: {
                         platform: 'sensor',
                         unique_id: '$deviceid-tub-clean',
@@ -210,7 +226,8 @@ export default class Device extends AABBDevice {
             //   [19]    bit6=active      — set once start is pressed; through Measuring/Delayed/Washing/Rinsing/Spinning/End
             //           bit1=child_lock  — confirmed via 0x72 toggle experiment (0x42=ON, 0x40=OFF)
             //   [22]    unknown          — varies; 0x03 in Off/Washing, 0x06 in Delayed/Spinning/End
-            //   [23]    status echo      — mirrors buf[4], confirmed across Delayed/Washing/Rinsing
+            //   [23]    pre_state        — last run state; mirrors buf[4] during active cycle;
+            //                            retains last state after power-off (e.g. End→Off transition shows End)
             //   [25]    tub_clean        — 9 during wash; increments to 10 on End packet confirmed (NOTE: NOT buf[26])
             // The 62-byte 0xEC packet has a second half [33..61] mirroring [2..30]
             // with [48]=[17]-1 (previous reading, ignored).
@@ -229,7 +246,9 @@ export default class Device extends AABBDevice {
             const delay_h = buf[16]
             const delay_m = buf[17]
             const steam = buf[18] & 0x80 // bit7: 0x80=steam ON
+            const active = buf[19] & 0x40 // bit6: program active (set once start pressed, through End)
             const child_lock = buf[19] & 0x02 // bit1: child lock engaged
+            const pre_state = buf[23]
             const tub_clean = buf[25] // confirmed at buf[25], not buf[26]
 
             this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
@@ -242,7 +261,9 @@ export default class Device extends AABBDevice {
             this.publishProperty('delay_remaining', delay_h * 60 + delay_m)
             this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
             this.publishProperty('steam', steam ? 'ON' : 'OFF')
+            this.publishProperty('active', active ? 'ON' : 'OFF')
             this.publishProperty('child_lock', child_lock ? 'ON' : 'OFF')
+            this.publishProperty('pre_state', STATES[pre_state] ?? 'unknown')
             this.publishProperty('tub_clean', tub_clean)
         }
     }
