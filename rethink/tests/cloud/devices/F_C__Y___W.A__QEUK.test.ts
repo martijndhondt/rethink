@@ -24,6 +24,12 @@ const SAMPLE_STEAM_ON_EC = buf(
     'AA4220EC001C06012C02010100030A0601000000804000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
 )
 
+// Derived from SAMPLE_WASHING_EC with raw[21] (= buf[19]) changed 0x40→0x42 to set the child_lock flag.
+// All other fields identical: Cotton/60°C/1400 RPM, 104 min remaining, initial=121 min, delay=0.
+const SAMPLE_CHILD_LOCK_ON_EC = buf(
+    'AA4220EC001C06012C02010100030A0601000000004200000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
+)
+
 // Synthetic packet: Cotton/40°C/1400 RPM delayed-start, delay=4h, 72 min program, tub_clean=9.
 const SAMPLE_DELAYED_EC = buf(
     'AA4220EC001C03004800480100000A04010004000000000006030009003400000500001C03004700480100000A040100040000000000060300090034000005009BBB',
@@ -89,6 +95,7 @@ describe(MODEL_ID, () => {
             'remote_start',
             'door_lock',
             'steam',
+            'child_lock',
             'tub_clean',
             'initial_time',
             'remaining_time',
@@ -130,6 +137,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.delay_remaining, 0)
         assert.equal(props.remote_start, 'OFF')
         assert.equal(props.steam, 'OFF')
+        assert.equal(props.child_lock, 'OFF')
         assert.equal(props.tub_clean, 10)
     })
 
@@ -179,6 +187,32 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.steam, 'ON')
         thinq.emit('data', SAMPLE_WASHING_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.steam, 'OFF')
+    })
+
+    test('child_lock=OFF when buf[19] bit1 is clear (standard washing packet)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF')
+    })
+
+    test('child_lock=ON when buf[19] bit1 is set', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_CHILD_LOCK_ON_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.child_lock, 'ON')
+        // All other fields identical to SAMPLE_WASHING_EC
+        assert.equal(props.status, 'Washing')
+        assert.equal(props.temp, 60)
+        assert.equal(props.spin, 1400)
+        assert.equal(props.remaining_time, 104)
+    })
+
+    test('child_lock toggles correctly across ON→OFF sequence', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_CHILD_LOCK_ON_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'ON')
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF')
     })
 
     test('off state: power=OFF, status=Off', () => {

@@ -116,6 +116,15 @@ export default class Device extends AABBDevice {
                         name: 'Steam',
                         icon: 'mdi:weather-fog',
                     },
+                    child_lock: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-child_lock',
+                        state_topic: '$this/child_lock',
+                        name: 'Child lock',
+                        icon: 'mdi:account-lock',
+                        device_class: 'lock',
+                        entity_category: 'diagnostic',
+                    },
                     tub_clean: {
                         platform: 'sensor',
                         unique_id: '$deviceid-tub-clean',
@@ -198,7 +207,8 @@ export default class Device extends AABBDevice {
             //   [16]    delay hours      — 4 confirmed
             //   [17]    delay minutes    — counts down 1/min confirmed
             //   [18]    bit7=steam       — 0x80=steam ON; confirmed via steam-toggle experiment
-            //   [19]    bit6=?           — 0x40 during Washing/Spinning/End; 0x00 in Off/Delayed-waiting; meaning unconfirmed
+            //   [19]    bit6=active      — set once start is pressed; through Measuring/Delayed/Washing/Rinsing/Spinning/End
+            //           bit1=child_lock  — confirmed via 0x72 toggle experiment (0x42=ON, 0x40=OFF)
             //   [22]    unknown          — varies; 0x03 in Off/Washing, 0x06 in Delayed/Spinning/End
             //   [23]    status echo      — mirrors buf[4], confirmed across Delayed/Washing/Rinsing
             //   [25]    tub_clean        — 9 during wash; increments to 10 on End packet confirmed (NOTE: NOT buf[26])
@@ -219,6 +229,7 @@ export default class Device extends AABBDevice {
             const delay_h = buf[16]
             const delay_m = buf[17]
             const steam = buf[18] & 0x80 // bit7: 0x80=steam ON
+            const child_lock = buf[19] & 0x02 // bit1: child lock engaged
             const tub_clean = buf[25] // confirmed at buf[25], not buf[26]
 
             this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
@@ -231,6 +242,7 @@ export default class Device extends AABBDevice {
             this.publishProperty('delay_remaining', delay_h * 60 + delay_m)
             this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
             this.publishProperty('steam', steam ? 'ON' : 'OFF')
+            this.publishProperty('child_lock', child_lock ? 'ON' : 'OFF')
             this.publishProperty('tub_clean', tub_clean)
         }
     }
