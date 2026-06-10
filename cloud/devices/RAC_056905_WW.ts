@@ -4,6 +4,7 @@ import { ClimateComponent, DeviceDiscovery, type Connection } from '../homeassis
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import * as TLV from '@/util/tlv'
+import { racAirTemp, racPipeTemp } from '@/util/ac_tables'
 import log from '@/util/logging'
 import HADevice from './base'
 
@@ -20,6 +21,7 @@ export default class Device extends TLVDevice {
     jetMode: boolean = false
     energySave: boolean = false
     tlvBlacklistDisableTimer: ReturnType<typeof setTimeout> | undefined
+    increasedQueryIntervalTimeout: ReturnType<typeof setTimeout> | undefined
     filterUsedTime: number = 0
     filterLifeTime: number = 0
     filterChangedDate: number = 0
@@ -35,6 +37,11 @@ export default class Device extends TLVDevice {
         if (this.tlvBlacklistDisableTimer != undefined) {
             clearTimeout(this.tlvBlacklistDisableTimer)
             this.tlvBlacklistDisableTimer = undefined
+        }
+
+        if (this.increasedQueryIntervalTimeout != undefined) {
+            clearTimeout(this.increasedQueryIntervalTimeout)
+            this.increasedQueryIntervalTimeout = undefined
         }
 
         if (this.filterInitialQueryTimeout != undefined) {
@@ -169,7 +176,8 @@ export default class Device extends TLVDevice {
         this.sendFilterQuery()
     }
 
-    publishClimateAction() {
+    updateClimateAction() {
+        // also updates query interval
         const modeTLV = this.getModeTLV()
 
         let iduRunning = true
@@ -180,6 +188,7 @@ export default class Device extends TLVDevice {
 
         const modes2ha = ['cooling', 'drying', 'fan', undefined, 'heating']
         let action: string | undefined = undefined
+        let increaseQueryInterval = false
         if (this.getPowerTLV() === 0) {
             action = 'off'
         } else if ((modeTLV === 0 || modeTLV === 1 || modeTLV === 4 || modeTLV === 6) && !iduRunning) {
@@ -188,11 +197,46 @@ export default class Device extends TLVDevice {
             // TODO: figure out how to detect the actual running mode in Auto
             // For now, clear the reported action.
             action = 'None'
+            increaseQueryInterval = true // assume it is running
         } else {
             action = modes2ha[modeTLV]
+            increaseQueryInterval = action != null && action !== 'fan'
         }
 
         if (action != null) this.HA.publishProperty(this.id, 'climate-action', action)
+        this.updateQueryInterval(increaseQueryInterval)
+    }
+
+    updateQueryInterval(increaseQueryInterval: boolean) {
+        if (increaseQueryInterval) {
+            if (this.increasedQueryIntervalTimeout != undefined) {
+                clearTimeout(this.increasedQueryIntervalTimeout)
+                this.increasedQueryIntervalTimeout = undefined
+            }
+
+            /*
+             * When in one of active modes update more frequently
+             * since parameters can change rapidly:
+             * every a bit less than half a minute.
+             *
+             * This matches the observed ODU parameter recalculation intervals:
+             * compressor Hz - every 30 seconds,
+             * EEV openings - every 30 seconds during transient periods.
+             */
+            this.setQueryInterval((30 - 2) * 1000)
+        } else if (this.increasedQueryIntervalTimeout == null) {
+            /*
+             * Reset to the default interval after 15 minutes,
+             * hopefully things returned to steady idle state by this time.
+             */
+            this.increasedQueryIntervalTimeout = setTimeout(
+                () => {
+                    this.increasedQueryIntervalTimeout = undefined
+                    this.setQueryInterval()
+                },
+                15 * 60 * 1000,
+            )
+        }
     }
 
     getPowerTLV() {
@@ -414,7 +458,7 @@ export default class Device extends TLVDevice {
                 unit_of_measurement: 'kW',
                 suggested_display_precision: 1,
             },
-            (raw) => Math.round(raw * 0.293 * 10) / 10,
+            (raw) => (raw !== 0 ? Math.round(raw * 0.293 * 10) / 10 : undefined),
         ) // raw is in kBTU / hour
 
         /*
@@ -425,9 +469,81 @@ export default class Device extends TLVDevice {
          * one reports the EEV opening value of the other Standard2 IDU (?).
          * This may be an ODU firmware bug. On the other hand, another Deluxe
          * IDU connected to the same ODU always reports correct EEV values.
-         * None of tested IDUs seem to notify by itself when this value changes.
+         * None of tested IDUs seem to usually notify by itself when this value changes.
          */
         this.addOptionalSensorField(config, 0x330, 'eev', 'EEV opening', 'mdi:valve')
+
+        /*
+         * IDUs send notifications about the updates of the temperatures below
+         * at their own pace, sometimes in clusters with other attributes.
+         * Deluxe IDUs send notifications noticeably more often than Standard2 IDUs.
+         *
+         * Pipe temps are sometimes reported as 0 (-100 C) for a moment after a shutdown.
+         * Make sure to filter out such updates.
+         */
+        this.addOptionalSensorField(
+            config,
+            0x2f9,
+            'pipeintemp',
+            'Pipe liquid temperature',
+            'mdi:pipe',
+            {
+                device_class: 'temperature',
+                unit_of_measurement: '°C',
+                suggested_display_precision: 2,
+            },
+            (raw) => racPipeTemp[255 - raw],
+        )
+        this.addOptionalSensorField(
+            config,
+            0x2fa,
+            'pipeouttemp',
+            'Pipe gas temperature',
+            'mdi:pipe',
+            {
+                device_class: 'temperature',
+                unit_of_measurement: '°C',
+                suggested_display_precision: 2,
+            },
+            (raw) => racPipeTemp[255 - raw],
+        )
+
+        this.addOptionalSensorField(
+            config,
+            [0x7a, 0x32c],
+            'oduhextemp',
+            'ODU HEX temperature', // "HEX" = "heat exchanger"
+            'mdi:heating-coil',
+            {
+                device_class: 'temperature',
+                unit_of_measurement: '°C',
+                suggested_display_precision: 2,
+            },
+            (raw) => racPipeTemp[255 - raw],
+        )
+        this.addOptionalSensorField(
+            config,
+            0x332,
+            'oduairtemp',
+            'ODU air temperature',
+            'mdi:thermometer-lines',
+            {
+                device_class: 'temperature',
+                unit_of_measurement: '°C',
+                suggested_display_precision: 2,
+            },
+            (raw) => racAirTemp[255 - raw],
+        )
+
+        /*
+         * [ 0x22a, 0x32f ] - ODU compressor Hz
+         * Standard2 IDUs even notify about the former
+         * tag changes.
+         *
+         * But the value seems to be capped at 15 Hz
+         * regardless of the actual compressor speed,
+         * which makes it of limited usability.
+         */
 
         if (this.raw_clip_state[0x2cc] & 1) {
             this.addModeDependentConfigSwitchField(
@@ -448,7 +564,8 @@ export default class Device extends TLVDevice {
         }
 
         if (this.raw_clip_state[0x2d3] & 1) {
-            this.addTimerField(config, 0x21a, 'sleeptimer', 'Sleep timer', 'mdi:bed-clock', 12)
+            // 15h - displayed in hex as "FH"
+            this.addTimerField(config, 0x21a, 'sleeptimer', 'Sleep timer', 'mdi:bed-clock', 15)
         }
 
         if (this.raw_clip_state[0x2d3] & 4) {
@@ -513,7 +630,7 @@ export default class Device extends TLVDevice {
                     name: 'action',
                     comp: 'climate',
                     read_callback: (val) => {
-                        this.publishClimateAction()
+                        this.updateClimateAction()
                         return false
                     },
                 },
@@ -522,10 +639,10 @@ export default class Device extends TLVDevice {
         }
 
         this.powerChangeHooks.push(() => {
-            this.publishClimateAction()
+            this.updateClimateAction()
         })
         this.modeChangeHooks.push(() => {
-            this.publishClimateAction()
+            this.updateClimateAction()
         })
 
         // 0x21f - "display light" value is inverted in some devices,
@@ -716,14 +833,23 @@ export default class Device extends TLVDevice {
 
     addOptionalSensorField(
         config: DeviceDiscovery,
-        id: number,
+        ids: number | number[],
         name: string,
         desc: string,
         icon?: string,
         extra?: Record<string, unknown>,
         read_xform?: FieldDefinition['read_xform'],
     ) {
-        if (this.raw_clip_state[id] == null) return
+        if (typeof ids === 'number') {
+            ids = [ids]
+        }
+
+        let id = ids.find(
+            (val) =>
+                this.raw_clip_state[val] != null &&
+                (read_xform == null || read_xform(this.raw_clip_state[val]) != null),
+        )
+        if (id == null) return
 
         const comp = {
             icon: icon ?? undefined,

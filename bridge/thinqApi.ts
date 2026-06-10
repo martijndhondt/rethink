@@ -5,7 +5,7 @@ import { subprocess } from './util'
 import fetch, { type RequestInit } from 'node-fetch'
 import { Metadata } from '@/cloud/thinq'
 
-const IOT_BASE_URL = 'https://common.lgthinq.com'
+export const IOT_BASE_URL = 'https://common.lgthinq.com'
 const GATEWAY_URL = 'https://route.lgthinq.com:46030/v1/service/application/gateway-uri'
 
 export function signInUrl(baseUrl: string, countryCode: string) {
@@ -113,7 +113,6 @@ export class Client {
         // x-country-code
         // x-language-code
         'x-service-phase': 'OP',
-        'x-client-id': '988fb08af011479f04d91bfd24c80771697fd416697c036114c995b6ad09f5b6',
         'x-origin': 'app-web-ANDROID',
         'x-thinq-app-logintype': 'LGE',
         // x-user-no
@@ -124,10 +123,17 @@ export class Client {
     static gatewayCache: Record<string, Promise<GatewayResponse>> = {}
     gateway: Promise<GatewayResponse>
     homeId: string | undefined
+    clientId: string
 
-    constructor(readonly env: Environment) {
+    constructor(
+        readonly env: Environment,
+        client_id?: string,
+    ) {
         this.headers['x-country-code'] = env.countryCode
         this.headers['x-language-code'] = 'en-' + env.countryCode
+        if (!client_id) client_id = randomBytes(32).toString('hex')
+
+        this.clientId = this.headers['x-client-id'] = client_id
 
         if (Client.gatewayCache[env.countryCode] !== undefined) this.gateway = Client.gatewayCache[env.countryCode]
         else
@@ -262,8 +268,8 @@ export class Client {
     }
 }
 
-type RouteResponse = { apiServer: string; mqttServer: string }
-type RouteCertResponse = { certificatePem: string }
+export type RouteResponse = { apiServer: string; mqttServer: string }
+export type RouteCertResponse = { certificatePem: string }
 type CertResponse = {
     certificatePem: string
     publication: {
@@ -331,9 +337,17 @@ export class Thinq2Device implements Device {
 
     async pair(env: Environment, otpResponse: OtpResponse): Promise<Buffer> {
         console.log('Fetching API urls')
-        const servers = await apiFetch<RouteResponse>(`${IOT_BASE_URL}/route`, {
-            headers: { 'x-country-code': env.countryCode, 'x-service-phase': 'OP', accept: 'application/json' },
-        })
+        const servers = (await Promise.race([
+            apiFetch<RouteResponse>(`${IOT_BASE_URL}/route`, {
+                headers: { 'x-country-code': env.countryCode, 'x-service-phase': 'OP', accept: 'application/json' },
+            }),
+            new Promise((resolve) => setTimeout(resolve, 5000)),
+        ])) as RouteResponse | undefined
+
+        if (!servers) {
+            console.log(`Failed to fetch ${IOT_BASE_URL}, make sure that you are not redirecting this address!`)
+            throw new Error(`route fetch failed on ${IOT_BASE_URL}`)
+        }
 
         console.log('Fetching CA cert')
         // DEV call
