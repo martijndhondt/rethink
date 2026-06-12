@@ -24,6 +24,12 @@ const SAMPLE_STEAM_ON_EC = buf(
     'AA4220EC001C06012C02010100030A0601000000804000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
 )
 
+// Derived from SAMPLE_WASHING_EC with raw[20] (= buf[18]) changed 0x00→0x20 to set the wrinkle_care flag.
+// All other fields identical: Cotton/60°C/1400 RPM, 104 min remaining, initial=121 min, steam=OFF.
+const SAMPLE_WRINKLE_CARE_ON_EC = buf(
+    'AA4220EC001C06012C02010100030A0601000000204000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
+)
+
 // Derived from SAMPLE_WASHING_EC with raw[21] (= buf[19]) changed 0x40→0x42 to set the child_lock flag.
 // All other fields identical: Cotton/60°C/1400 RPM, 104 min remaining, initial=121 min, delay=0.
 const SAMPLE_CHILD_LOCK_ON_EC = buf(
@@ -95,6 +101,7 @@ describe(MODEL_ID, () => {
             'remote_start',
             'door_lock',
             'steam',
+            'wrinkle_care',
             'child_lock',
             'active',
             'pre_state',
@@ -141,6 +148,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.delay_remaining, 0)
         assert.equal(props.remote_start, 'OFF')
         assert.equal(props.steam, 'OFF')
+        assert.equal(props.wrinkle_care, 'OFF')
         assert.equal(props.active, 'ON')
         assert.equal(props.child_lock, 'OFF')
         assert.equal(props.pre_state, 'Washing')
@@ -194,6 +202,32 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.steam, 'ON')
         thinq.emit('data', SAMPLE_WASHING_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.steam, 'OFF')
+    })
+
+    test('wrinkle_care=OFF when buf[18] bit5 is clear (standard washing packet)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'OFF')
+    })
+
+    test('wrinkle_care=ON when buf[18] bit5 is set', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WRINKLE_CARE_ON_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.wrinkle_care, 'ON')
+        // steam is still OFF (bit7 clear), other fields unchanged
+        assert.equal(props.steam, 'OFF')
+        assert.equal(props.status, 'Washing')
+        assert.equal(props.temp, 60)
+        assert.equal(props.spin, 1400)
+    })
+
+    test('wrinkle_care toggles correctly across ON→OFF sequence', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WRINKLE_CARE_ON_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'ON')
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'OFF')
     })
 
     test('child_lock=OFF when buf[19] bit1 is clear (standard washing packet)', () => {

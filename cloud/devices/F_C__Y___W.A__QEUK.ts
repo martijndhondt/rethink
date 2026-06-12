@@ -116,6 +116,13 @@ export default class Device extends AABBDevice {
                         name: 'Steam',
                         icon: 'mdi:weather-fog',
                     },
+                    wrinkle_care: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-wrinkle_care',
+                        state_topic: '$this/wrinkle_care',
+                        name: 'Wrinkle care',
+                        icon: 'mdi:iron-outline',
+                    },
                     child_lock: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-child_lock',
@@ -223,14 +230,17 @@ export default class Device extends AABBDevice {
             //   [16]    delay hours      — 4 confirmed
             //   [17]    delay minutes    — counts down 1/min confirmed
             //   [18]    bit7=steam       — 0x80=steam ON; confirmed via steam-toggle experiment
+            //           bit5=wrinkle_care — 0x20=wrinkle care ON; confirmed via toggle (+31 min to duration)
             //   [19]    bit6=active      — set once start is pressed; through Measuring/Delayed/Washing/Rinsing/Spinning/End
             //           bit1=child_lock  — confirmed via 0x72 toggle experiment (0x42=ON, 0x40=OFF)
             //   [22]    unknown          — varies; 0x03 in Off/Washing, 0x06 in Delayed/Spinning/End
             //   [23]    pre_state        — last run state; mirrors buf[4] during active cycle;
             //                            retains last state after power-off (e.g. End→Off transition shows End)
             //   [25]    tub_clean        — 9 during wash; increments to 10 on End packet confirmed (NOTE: NOT buf[26])
-            // The 62-byte 0xEC packet has a second half [33..61] mirroring [2..30]
-            // with [48]=[17]-1 (previous reading, ignored).
+            // The 62-byte 0xEC packet has a second section [32..61] that during option
+            // selection holds the alternative configuration (the two sections alternate
+            // between current and previous settings as the user scrolls). Only [0..31]
+            // (first section) is read here; the second section is ignored.
             // End state: status=0x0A, spin/temp/course all go to 0x00 → 'unknown', remaining=0, tub_clean++.
             // Power stays ON during End (status>0); goes OFF only when status=0x00 ('Off').
             // TODO: error byte offset — needs a packet with an active error.
@@ -246,6 +256,7 @@ export default class Device extends AABBDevice {
             const delay_h = buf[16]
             const delay_m = buf[17]
             const steam = buf[18] & 0x80 // bit7: 0x80=steam ON
+            const wrinkle_care = buf[18] & 0x20 // bit5: 0x20=wrinkle care ON
             const active = buf[19] & 0x40 // bit6: program active (set once start pressed, through End)
             const child_lock = buf[19] & 0x02 // bit1: child lock engaged
             const pre_state = buf[23]
@@ -261,6 +272,7 @@ export default class Device extends AABBDevice {
             this.publishProperty('delay_remaining', delay_h * 60 + delay_m)
             this.publishProperty('remote_start', lock_status & 2 ? 'ON' : 'OFF')
             this.publishProperty('steam', steam ? 'ON' : 'OFF')
+            this.publishProperty('wrinkle_care', wrinkle_care ? 'ON' : 'OFF')
             this.publishProperty('active', active ? 'ON' : 'OFF')
             this.publishProperty('child_lock', child_lock ? 'ON' : 'OFF')
             this.publishProperty('pre_state', STATES[pre_state] ?? 'unknown')
