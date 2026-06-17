@@ -201,8 +201,9 @@ export default class Device extends AABBDevice {
         //        state. Has different field layout ([4]≠status, [5][6]≠time); [12][13][14]
         //        and [25] coincidentally sit at the same offsets but [4]=0x04='Measuring'
         //        would be wrong to publish. Silently ignored.
-        // 0xD8 = 3-byte door-state packet: floods at ~2s intervals while machine is on
-        //        with no program running. buf[2]=0x00=closed/locked, 0x0b=open/unlocked.
+        // 0xD8 = 3-byte door-state packet: floods at ~2s intervals during door interaction
+        //        and cycle startup. buf[2]=0x00=door not machine-locked (accessible);
+        //        non-zero=door machine-locked (0x30 observed at cycle start, 0x0B also seen).
         //        This is the sole source of door_lock state — buf[9] bit6 is unused on
         //        this model and never changes.
         const isEC = buf.length === 62 && buf[0] === 0x20 && buf[1] === 0xec
@@ -212,7 +213,7 @@ export default class Device extends AABBDevice {
         if (isE2) return
 
         if (isD8) {
-            // Non-zero = door open (unlocked); 0x00 = door closed (locked).
+            // Non-zero = door machine-locked (ON in HA = Locked); 0x00 = not machine-locked.
             this.publishProperty('door_lock', buf[2] ? 'ON' : 'OFF')
             return
         }
@@ -223,7 +224,8 @@ export default class Device extends AABBDevice {
             //   [5][6]  remaining_time   — counts down during wash; equals initial when delayed
             //                            NOTE: shows 0 briefly at wash start (load-measuring phase)
             //   [7][8]  initial_time     — fixed total program duration (72 min confirmed, stays constant)
-            //   [9]     lock_status      — bit1=remote_start (ON when set); bit6 unused (always 0 — door is via 0xD8)
+            //   [9]     lock_status      — bit1=remote_start confirmed (0x32 seen with remote start ON);
+            //                            other bits vary by program/state; bit6 always 0 — door is via 0xD8
             //   [12]    spin index       — SPINS[10]=1400 RPM confirmed
             //   [13]    temp index       — TEMPERATURES[4]=40°C confirmed
             //   [14]    course           — COURSES[0x01]='Cotton' confirmed

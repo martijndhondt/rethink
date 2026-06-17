@@ -36,6 +36,13 @@ const SAMPLE_CHILD_LOCK_ON_EC = buf(
     'AA4220EC001C06012C02010100030A0601000000004200000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
 )
 
+// Real capture: Ready state, Ease Care/40°C/1200 RPM, 59 min, remote_start=ON.
+// buf[9]=0x32 (bit1 set) — captured while machine was in Ready state with remote start enabled.
+// Section 1 shows this config; section 2 shows Cotton/60°C/1400/267 min (user was scrolling options).
+const SAMPLE_REMOTE_START_ON_EC = buf(
+    'AA4220EC001C01003B003B3200030904010000000100000001010030003400000000001C01041B041B0400030A0601000000000000000201003000340000020044BB',
+)
+
 // Synthetic packet: Cotton/40°C/1400 RPM delayed-start, delay=4h, 72 min program, tub_clean=9.
 const SAMPLE_DELAYED_EC = buf(
     'AA4220EC001C03004800480100000A04010004000000000006030009003400000500001C03004700480100000A040100040000000000060300090034000005009BBB',
@@ -64,9 +71,12 @@ const SAMPLE_E2_IGNORED = buf('AA2420E2091C04032603260100030A0601000000400000000
 // Same field layout as the first section of 0xEC. Cotton/60°C/1400 RPM, 50 min remaining, tub_clean=10.
 const SAMPLE_WASHING_EB = buf('AA2420EB001C06003200480100000A0601000000000000000606000A003400000500C4BB')
 
-// Real captures: 0xD8 door-state packets (3-byte, flood while machine is on with no program).
-const SAMPLE_DOOR_CLOSED = buf('AA0720D800FCBB') // buf[2]=0x00 → closed/locked
-const SAMPLE_DOOR_OPEN = buf('AA0720D80BE1BB') // buf[2]=0x0B → open/unlocked
+// Real captures: 0xD8 door-state packets (3-byte).
+// 0x00 = door not machine-locked (accessible); non-zero = door machine-locked.
+const SAMPLE_DOOR_UNLOCKED = buf('AA0720D800FCBB') // buf[2]=0x00 → not machine-locked → OFF
+const SAMPLE_DOOR_LOCKED = buf('AA0720D80BE1BB') //  buf[2]=0x0B → machine-locked → ON
+// Real capture from cycle start: buf[2]=0x30 → door sealed by machine → ON
+const SAMPLE_DOOR_LOCKED_0x30 = buf('AA0720D8308CBB')
 
 // Expected outgoing packets emitted by the device file.
 const WRITE_INIT = 'AA0EF0ED1121010000001800B5BB'
@@ -256,6 +266,37 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF')
     })
 
+    test('remote_start=OFF when buf[9] bit1 is clear (standard washing packet)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_start, 'OFF')
+    })
+
+    test('remote_start=ON when buf[9] bit1 is set (real capture, Ready state)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_REMOTE_START_ON_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.remote_start, 'ON')
+        // Verify other fields decoded correctly from this packet
+        assert.equal(props.status, 'Ready')
+        assert.equal(props.course, 'Cotton')
+        assert.equal(props.spin, 1200) // SPINS[9]
+        assert.equal(props.temp, 40)
+        assert.equal(props.remaining_time, 59)
+        assert.equal(props.initial_time, 59)
+        assert.equal(props.steam, 'OFF')
+        assert.equal(props.wrinkle_care, 'OFF')
+        assert.equal(props.active, 'OFF')
+    })
+
+    test('remote_start toggles correctly across ON→OFF sequence', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_REMOTE_START_ON_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_start, 'ON')
+        thinq.emit('data', SAMPLE_DELAYED_EC) // buf[9]=0x01 → bit1=0 → OFF
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_start, 'OFF')
+    })
+
     test('off state: power=OFF, status=Off, pre_state retains last run state (End)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_OFF_EC)
@@ -285,25 +326,31 @@ describe(MODEL_ID, () => {
         assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
     })
 
-    test('0xD8 door-closed packet publishes door_lock=OFF (locked)', () => {
+    test('0xD8 buf[2]=0x00 publishes door_lock=OFF (not machine-locked)', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', SAMPLE_DOOR_CLOSED)
+        thinq.emit('data', SAMPLE_DOOR_UNLOCKED)
         assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
     })
 
-    test('0xD8 door-open packet publishes door_lock=ON (unlocked)', () => {
+    test('0xD8 buf[2]=non-zero (0x0B) publishes door_lock=ON (machine-locked)', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', SAMPLE_DOOR_OPEN)
+        thinq.emit('data', SAMPLE_DOOR_LOCKED)
         assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
     })
 
-    test('door_lock toggles correctly across open/close sequence', () => {
+    test('0xD8 buf[2]=0x30 (cycle-start lock) publishes door_lock=ON (real capture)', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', SAMPLE_DOOR_CLOSED)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
-        thinq.emit('data', SAMPLE_DOOR_OPEN)
+        thinq.emit('data', SAMPLE_DOOR_LOCKED_0x30)
         assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
-        thinq.emit('data', SAMPLE_DOOR_CLOSED)
+    })
+
+    test('door_lock toggles correctly across lock/unlock sequence', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_DOOR_UNLOCKED)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
+        thinq.emit('data', SAMPLE_DOOR_LOCKED)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        thinq.emit('data', SAMPLE_DOOR_UNLOCKED)
         assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
     })
 
