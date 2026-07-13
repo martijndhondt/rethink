@@ -279,6 +279,12 @@ export default class Device extends AABBDevice {
             this.publishProperty('child_lock', child_lock ? 'ON' : 'OFF')
             this.publishProperty('pre_state', STATES[pre_state] ?? 'unknown')
             this.publishProperty('tub_clean', tub_clean)
+
+            // Derive door_lock from status for Delayed and active-cycle states where
+            // 0xD8 packets are not emitted. Off(0) → unlocked; Ready(1) → 0xD8 is
+            // authoritative; everything else (Delayed, Measuring … End, Cooling …) → locked.
+            if (status === 0) this.publishProperty('door_lock', 'OFF')
+            else if (status !== 1) this.publishProperty('door_lock', 'ON')
         }
     }
 
