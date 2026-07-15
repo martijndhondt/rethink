@@ -342,6 +342,14 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
     })
 
+    test('0xD8 door_lock=OFF is ignored during active wash (status-derived ON prevails)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC) // status=Washing → door_lock=ON
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        thinq.emit('data', SAMPLE_DOOR_UNLOCKED) // 0xD8 buf[2]=0x00 must not override
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+    })
+
     test('0xD8 overrides door_lock during Ready/startup phase', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_DOOR_LOCKED) // 0xD8 says locked

@@ -11,6 +11,10 @@ import { ERRORS, STATES, COURSES, TEMPERATURES, SPINS } from './washer_common'
 // Offsets confirmed from live captures against known settings:
 //   Cotton/40°C/1400RPM/Normal-rinse, delayed-start 4h, tub-clean-counter=9, remote-start=off.
 export default class Device extends AABBDevice {
+    // Tracks the last status byte from 0xEC/0xEB so the 0xD8 handler can
+    // suppress spurious door_lock=OFF messages during active-cycle states.
+    private lastStatus = -1
+
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
         this.setConfig(
@@ -214,7 +218,11 @@ export default class Device extends AABBDevice {
 
         if (isD8) {
             // Non-zero = door machine-locked (ON in HA = Locked); 0x00 = not machine-locked.
-            this.publishProperty('door_lock', buf[2] ? 'ON' : 'OFF')
+            // Only authoritative during Off (0) and Ready (1); ignored once an active-cycle
+            // state is established because the machine can send 0xD8 buf[2]=0x00 spuriously
+            // during washing/rinsing (e.g. on child-lock toggle), which would otherwise
+            // incorrectly override the status-derived door_lock=ON.
+            if (this.lastStatus <= 1) this.publishProperty('door_lock', buf[2] ? 'ON' : 'OFF')
             return
         }
 
@@ -247,6 +255,7 @@ export default class Device extends AABBDevice {
             // Power stays ON during End (status>0); goes OFF only when status=0x00 ('Off').
             // TODO: error byte offset — needs a packet with an active error.
             const status = buf[4]
+            this.lastStatus = status
             const remain_h = buf[5] // remaining_time hours (counts down; 0 briefly during load-measuring)
             const remain_m = buf[6] // remaining_time minutes
             const initial_h = buf[7] // initial_time hours (fixed for the lifetime of the program)
