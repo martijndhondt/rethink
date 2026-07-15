@@ -30,10 +30,11 @@ const SAMPLE_WRINKLE_CARE_ON_EC = buf(
     'AA4220EC001C06012C02010100030A0601000000204000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
 )
 
-// Derived from SAMPLE_WASHING_EC with raw[21] (= buf[19]) changed 0x40→0x42 to set the child_lock flag.
+// Derived from SAMPLE_WASHING_EC with raw[21] (= buf[19]) changed 0x40→0xC0 to set the child_lock flag (bit7).
+// Real-capture confirmation: 2026-07-15T16:24 buf[19]=0xC0 observed immediately after user enabled child lock.
 // All other fields identical: Cotton/60°C/1400 RPM, 104 min remaining, initial=121 min, delay=0.
 const SAMPLE_CHILD_LOCK_ON_EC = buf(
-    'AA4220EC001C06012C02010100030A0601000000004200000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
+    'AA4220EC001C06012C02010100030A060100000000C000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
 )
 
 // Real capture: Ready state, Ease Care/40°C/1200 RPM, 59 min, remote_start=ON.
@@ -243,13 +244,13 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'OFF')
     })
 
-    test('child_lock=OFF when buf[19] bit1 is clear (standard washing packet)', () => {
+    test('child_lock=OFF when buf[19] bit7 is clear (standard washing packet)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF')
     })
 
-    test('child_lock=ON when buf[19] bit1 is set', () => {
+    test('child_lock=ON when buf[19] bit7 is set', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_CHILD_LOCK_ON_EC)
         const props = ha.devices[DEVICE_ID].properties

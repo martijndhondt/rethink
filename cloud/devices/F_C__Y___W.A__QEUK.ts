@@ -234,7 +234,7 @@ export default class Device extends AABBDevice {
             //   [18]    bit7=steam       — 0x80=steam ON; confirmed via steam-toggle experiment
             //           bit5=wrinkle_care — 0x20=wrinkle care ON; confirmed via toggle (+31 min to duration)
             //   [19]    bit6=active      — set once start is pressed; through Measuring/Delayed/Washing/Rinsing/Spinning/End
-            //           bit1=child_lock  — confirmed via 0x72 toggle experiment (0x42=ON, 0x40=OFF)
+            //           bit7=child_lock  — confirmed via live capture 2026-07-15 (0xC0=active+child_lock ON, 0x40=active only)
             //   [22]    unknown          — varies; 0x03 in Off/Washing, 0x06 in Delayed/Spinning/End
             //   [23]    pre_state        — last run state; mirrors buf[4] during active cycle;
             //                            retains last state after power-off (e.g. End→Off transition shows End)
@@ -260,7 +260,7 @@ export default class Device extends AABBDevice {
             const steam = buf[18] & 0x80 // bit7: 0x80=steam ON
             const wrinkle_care = buf[18] & 0x20 // bit5: 0x20=wrinkle care ON
             const active = buf[19] & 0x40 // bit6: program active (set once start pressed, through End)
-            const child_lock = buf[19] & 0x02 // bit1: child lock engaged
+            const child_lock = buf[19] & 0x80 // bit7: child lock engaged
             const pre_state = buf[23]
             const tub_clean = buf[25] // confirmed at buf[25], not buf[26]
 
