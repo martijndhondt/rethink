@@ -74,9 +74,9 @@ const SAMPLE_WASHING_EB = buf('AA2420EB001C06003200480100000A0601000000000000000
 
 // Real captures: 0xD8 door-state packets (3-byte).
 // 0x00 = door not machine-locked (accessible); non-zero = door machine-locked.
-const SAMPLE_DOOR_UNLOCKED = buf('AA0720D800FCBB') // buf[2]=0x00 → not machine-locked → OFF
-const SAMPLE_DOOR_LOCKED = buf('AA0720D80BE1BB') //  buf[2]=0x0B → machine-locked → ON
-// Real capture from cycle start: buf[2]=0x30 → door sealed by machine → ON
+const SAMPLE_DOOR_UNLOCKED = buf('AA0720D800FCBB') // buf[2]=0x00 → not machine-locked → ON (Unlocked)
+const SAMPLE_DOOR_LOCKED = buf('AA0720D80BE1BB') //  buf[2]=0x0B → machine-locked → OFF (Locked)
+// Real capture from cycle start: buf[2]=0x30 → door sealed by machine → OFF (Locked)
 const SAMPLE_DOOR_LOCKED_0x30 = buf('AA0720D8308CBB')
 
 // Expected outgoing packets emitted by the device file.
@@ -141,7 +141,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.delay_remaining, 4 * 60) // 4h 0m
         assert.equal(props.remote_start, 'OFF')
         assert.equal(props.active, 'OFF') // synthetic packet: start not yet pressed
-        assert.equal(props.door_lock, 'ON') // derived from status: Delayed → locked
+        assert.equal(props.door_lock, 'OFF') // derived from status: Delayed → locked → OFF (HA device_class=lock)
         assert.equal(props.pre_state, 'Delayed')
         assert.equal(props.tub_clean, 9)
     })
@@ -162,8 +162,8 @@ describe(MODEL_ID, () => {
         assert.equal(props.steam, 'OFF')
         assert.equal(props.wrinkle_care, 'OFF')
         assert.equal(props.active, 'ON')
-        assert.equal(props.child_lock, 'OFF')
-        assert.equal(props.door_lock, 'ON') // derived from status: Washing → locked
+        assert.equal(props.child_lock, 'ON') // bit7=0 → disengaged → Unlocked → ON (HA device_class=lock)
+        assert.equal(props.door_lock, 'OFF') // derived from status: Washing → locked → OFF
         assert.equal(props.pre_state, 'Washing')
         assert.equal(props.tub_clean, 10)
     })
@@ -187,7 +187,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.spin, 'unknown')
         assert.equal(props.temp, 'unknown')
         assert.equal(props.course, 'unknown')
-        assert.equal(props.door_lock, 'ON') // still locked at End; unlocks when status→Off
+        assert.equal(props.door_lock, 'OFF') // still locked at End → OFF; becomes ON when status→Off
         assert.equal(props.pre_state, 'End')
         assert.equal(props.tub_clean, 10)
     })
@@ -244,17 +244,17 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'OFF')
     })
 
-    test('child_lock=OFF when buf[19] bit7 is clear (standard washing packet)', () => {
+    test('child_lock=ON (Unlocked) when buf[19] bit7 is clear (disengaged)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EC)
-        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'ON')
     })
 
-    test('child_lock=ON when buf[19] bit7 is set', () => {
+    test('child_lock=OFF (Locked) when buf[19] bit7 is set (engaged)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_CHILD_LOCK_ON_EC)
         const props = ha.devices[DEVICE_ID].properties
-        assert.equal(props.child_lock, 'ON')
+        assert.equal(props.child_lock, 'OFF')
         // All other fields identical to SAMPLE_WASHING_EC
         assert.equal(props.status, 'Washing')
         assert.equal(props.temp, 60)
@@ -262,12 +262,12 @@ describe(MODEL_ID, () => {
         assert.equal(props.remaining_time, 104)
     })
 
-    test('child_lock toggles correctly across ON→OFF sequence', () => {
+    test('child_lock toggles correctly when engaged/disengaged', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_CHILD_LOCK_ON_EC)
-        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF') // engaged → Locked → OFF
         thinq.emit('data', SAMPLE_WASHING_EC)
-        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'ON') // disengaged → Unlocked → ON
     })
 
     test('remote_start=OFF when buf[9] bit1 is clear (standard washing packet)', () => {
@@ -308,7 +308,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.power, 'OFF')
         assert.equal(props.status, 'Off')
         assert.equal(props.active, 'OFF')
-        assert.equal(props.door_lock, 'OFF') // derived from status: Off → unlocked
+        assert.equal(props.door_lock, 'ON') // derived from status: Off → unlocked → ON
         assert.equal(props.pre_state, 'End') // buf[23] retains End even after power-off
     })
 
@@ -331,59 +331,59 @@ describe(MODEL_ID, () => {
         assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
     })
 
-    test('door_lock=ON derived from 0xEC for active/delayed states even without 0xD8', () => {
+    test('door_lock=OFF (Locked) derived from 0xEC for active/delayed states even without 0xD8', () => {
         const { ha, thinq } = makeDevice()
         // No 0xD8 ever arrives — door_lock must still reflect the cycle state.
         thinq.emit('data', SAMPLE_DELAYED_EC)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF') // Delayed → locked
         thinq.emit('data', SAMPLE_WASHING_EC)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF') // Washing → locked
         thinq.emit('data', SAMPLE_OFF_EC)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON') // Off → unlocked
     })
 
-    test('0xD8 door_lock=OFF is ignored during active wash (status-derived ON prevails)', () => {
+    test('0xD8 door_lock=ON (Unlocked) is ignored during active wash (status-derived OFF prevails)', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', SAMPLE_WASHING_EC) // status=Washing → door_lock=ON
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        thinq.emit('data', SAMPLE_WASHING_EC) // status=Washing → door_lock=OFF (Locked)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
         thinq.emit('data', SAMPLE_DOOR_UNLOCKED) // 0xD8 buf[2]=0x00 must not override
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
     })
 
     test('0xD8 overrides door_lock during Ready/startup phase', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', SAMPLE_DOOR_LOCKED) // 0xD8 says locked
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
-        thinq.emit('data', SAMPLE_DOOR_UNLOCKED) // 0xD8 says unlocked (door opened)
+        thinq.emit('data', SAMPLE_DOOR_LOCKED) // 0xD8 says locked → OFF
         assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
+        thinq.emit('data', SAMPLE_DOOR_UNLOCKED) // 0xD8 says unlocked (door opened) → ON
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
     })
 
-    test('0xD8 buf[2]=0x00 publishes door_lock=OFF (not machine-locked)', () => {
+    test('0xD8 buf[2]=0x00 publishes door_lock=ON (not machine-locked → Unlocked)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_DOOR_UNLOCKED)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+    })
+
+    test('0xD8 buf[2]=non-zero (0x0B) publishes door_lock=OFF (machine-locked → Locked)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_DOOR_LOCKED)
         assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
     })
 
-    test('0xD8 buf[2]=non-zero (0x0B) publishes door_lock=ON (machine-locked)', () => {
-        const { ha, thinq } = makeDevice()
-        thinq.emit('data', SAMPLE_DOOR_LOCKED)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
-    })
-
-    test('0xD8 buf[2]=0x30 (cycle-start lock) publishes door_lock=ON (real capture)', () => {
+    test('0xD8 buf[2]=0x30 (cycle-start lock) publishes door_lock=OFF (real capture)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_DOOR_LOCKED_0x30)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
     })
 
     test('door_lock toggles correctly across lock/unlock sequence', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_DOOR_UNLOCKED)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON') // unlocked → ON
         thinq.emit('data', SAMPLE_DOOR_LOCKED)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF') // locked → OFF
         thinq.emit('data', SAMPLE_DOOR_UNLOCKED)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.door_lock, 'ON') // unlocked → ON
     })
 
     test('frames not matching the AA..BB envelope are ignored', () => {

@@ -217,12 +217,13 @@ export default class Device extends AABBDevice {
         if (isE2) return
 
         if (isD8) {
-            // Non-zero = door machine-locked (ON in HA = Locked); 0x00 = not machine-locked.
+            // Non-zero = door machine-locked; 0x00 = not machine-locked.
+            // HA binary_sensor device_class='lock': OFF=Locked (Vergrendeld), ON=Unlocked (Ontgrendeld).
             // Only authoritative during Off (0) and Ready (1); ignored once an active-cycle
             // state is established because the machine can send 0xD8 buf[2]=0x00 spuriously
             // during washing/rinsing (e.g. on child-lock toggle), which would otherwise
-            // incorrectly override the status-derived door_lock=ON.
-            if (this.lastStatus <= 1) this.publishProperty('door_lock', buf[2] ? 'ON' : 'OFF')
+            // incorrectly override the status-derived door_lock=OFF.
+            if (this.lastStatus <= 1) this.publishProperty('door_lock', buf[2] ? 'OFF' : 'ON')
             return
         }
 
@@ -285,15 +286,15 @@ export default class Device extends AABBDevice {
             this.publishProperty('steam', steam ? 'ON' : 'OFF')
             this.publishProperty('wrinkle_care', wrinkle_care ? 'ON' : 'OFF')
             this.publishProperty('active', active ? 'ON' : 'OFF')
-            this.publishProperty('child_lock', child_lock ? 'ON' : 'OFF')
+            this.publishProperty('child_lock', child_lock ? 'OFF' : 'ON')
             this.publishProperty('pre_state', STATES[pre_state] ?? 'unknown')
             this.publishProperty('tub_clean', tub_clean)
 
             // Derive door_lock from status for Delayed and active-cycle states where
-            // 0xD8 packets are not emitted. Off(0) → unlocked; Ready(1) → 0xD8 is
-            // authoritative; everything else (Delayed, Measuring … End, Cooling …) → locked.
-            if (status === 0) this.publishProperty('door_lock', 'OFF')
-            else if (status !== 1) this.publishProperty('door_lock', 'ON')
+            // 0xD8 packets are not emitted. HA device_class='lock': OFF=Locked, ON=Unlocked.
+            // Off(0) → unlocked → ON; Ready(1) → 0xD8 authoritative; everything else → locked → OFF.
+            if (status === 0) this.publishProperty('door_lock', 'ON')
+            else if (status !== 1) this.publishProperty('door_lock', 'OFF')
         }
     }
 
