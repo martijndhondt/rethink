@@ -79,6 +79,13 @@ const SAMPLE_DOOR_LOCKED = buf('AA0720D80BE1BB') //  buf[2]=0x0B → machine-loc
 // Real capture from cycle start: buf[2]=0x30 → door sealed by machine → OFF (Locked)
 const SAMPLE_DOOR_LOCKED_0x30 = buf('AA0720D8308CBB')
 
+// Real capture: Error state — dE2 (door lock error), Cotton/60°C/1400 RPM, delay=7h, tub_clean=50.
+// buf[4]=0x12=Error, buf[10]=0x01=DE2, buf[23]=0x12=Error.
+// Captured 2026-08-02T19:42:33Z after machine failed to lock door during delayed-start attempt.
+const SAMPLE_ERROR_EC = buf(
+    'AA4220EC001C12031503150101030A06010007000000000004120032003400000400001C00031503150100000000000000000000000004010032003400000400FABB',
+)
+
 // Expected outgoing packets emitted by the device file.
 const WRITE_INIT = 'AA0EF0ED1121010000001800B5BB'
 const WRITE_POWER_ON = 'AA08F02A010098BB'
@@ -443,5 +450,33 @@ describe(MODEL_ID, () => {
         thinq.resetRecorder()
         dev.setProperty('does-not-exist', 'whatever')
         assert.equal(thinq.outbox.length, 0)
+    })
+
+    test('error=OFF, error_message=OK when buf[10]=0x00 (no error, standard washing packet)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_WASHING_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.error, 'OFF')
+        assert.equal(props.error_message, 'OK')
+    })
+
+    test('error=ON, error_message=DE2 when buf[10]=0x01 (dE2 door lock error, real capture)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_ERROR_EC)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.error, 'ON')
+        assert.equal(props.error_message, 'Door lock error (DE2)')
+        assert.equal(props.status, 'Error')
+        assert.equal(props.pre_state, 'Error')
+        assert.equal(props.tub_clean, 50)
+    })
+
+    test('error clears when machine recovers from error state', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', SAMPLE_ERROR_EC)
+        assert.equal(ha.devices[DEVICE_ID].properties.error, 'ON')
+        thinq.emit('data', SAMPLE_WASHING_EC) // buf[10]=0x00
+        assert.equal(ha.devices[DEVICE_ID].properties.error, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.error_message, 'OK')
     })
 })

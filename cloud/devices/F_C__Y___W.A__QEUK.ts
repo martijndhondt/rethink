@@ -244,6 +244,9 @@ export default class Device extends AABBDevice {
             //           bit5=wrinkle_care — 0x20=wrinkle care ON; confirmed via toggle (+31 min to duration)
             //   [19]    bit6=active      — set once start is pressed; through Measuring/Delayed/Washing/Rinsing/Spinning/End
             //           bit7=child_lock  — confirmed via live capture 2026-07-15 (0xC0=active+child_lock ON, 0x40=active only)
+            //   [10]    error_code       — ERRORS index; 0=OK; 0x01=DE2 (door lock error) confirmed via
+            //                            live dE2 capture 2026-08-02: buf[10]=0x01 in all Error packets,
+            //                            buf[10]=0x00 in all non-error states (Off/Ready/Delayed/Measuring).
             //   [22]    unknown          — varies; 0x03 in Off/Washing, 0x06 in Delayed/Spinning/End
             //   [23]    pre_state        — last run state; mirrors buf[4] during active cycle;
             //                            retains last state after power-off (e.g. End→Off transition shows End)
@@ -254,7 +257,6 @@ export default class Device extends AABBDevice {
             // (first section) is read here; the second section is ignored.
             // End state: status=0x0A, spin/temp/course all go to 0x00 → 'unknown', remaining=0, tub_clean++.
             // Power stays ON during End (status>0); goes OFF only when status=0x00 ('Off').
-            // TODO: error byte offset — needs a packet with an active error.
             const status = buf[4]
             this.lastStatus = status
             const remain_h = buf[5] // remaining_time hours (counts down; 0 briefly during load-measuring)
@@ -262,6 +264,7 @@ export default class Device extends AABBDevice {
             const initial_h = buf[7] // initial_time hours (fixed for the lifetime of the program)
             const initial_m = buf[8] // initial_time minutes
             const lock_status = buf[9]
+            const error_code = buf[10]
             const spin = buf[12]
             const temp = buf[13] // 0x00 during rinse (cold water) → publishes 'unknown', expected
             const course = buf[14]
@@ -276,6 +279,8 @@ export default class Device extends AABBDevice {
 
             this.publishProperty('power', status > 0 ? 'ON' : 'OFF')
             this.publishProperty('status', STATES[status] ?? 'unknown')
+            this.publishProperty('error', error_code ? 'ON' : 'OFF')
+            this.publishProperty('error_message', ERRORS[error_code] ?? 'unknown')
             this.publishProperty('course', COURSES[course] ?? 'unknown')
             this.publishProperty('spin', SPINS[spin] ?? 'unknown')
             this.publishProperty('temp', TEMPERATURES[temp] ?? 'unknown')
