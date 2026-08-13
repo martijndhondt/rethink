@@ -3,23 +3,39 @@ document.addEventListener('DOMContentLoaded', function () {})
 let ws
 let reconnectTimer
 
-const baseUrl = new URL(window.location)
-baseUrl.search = ''
-baseUrl.hash = ''
-
 get('device_id').innerText = new URLSearchParams(window.location.search).get('id')
 get('device_status').innerText = 'Waiting for rethink connection...'
 
+// The socket lives at /device, a sibling of this page. Appending to the page's own path instead
+// asks for /monitordevice, which nothing serves.
+function deviceSocketUrl() {
+    const url = new URL('device', window.location.href)
+    url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    url.search = window.location.search
+    return url
+}
+
+// As on the panel: first retry near-immediately, back off only if that fails too.
+let retryDelay = 250
+
 function connect() {
     clearTimeout(reconnectTimer)
-    let ws = new WebSocket(baseUrl + `device${window.location.search}`)
+    if (ws) {
+        ws.onclose = ws.onopen = ws.onmessage = null
+        try {
+            ws.close()
+        } catch {}
+    }
+    ws = new WebSocket(deviceSocketUrl())
 
     ws.onclose = () => {
-        reconnectTimer = setTimeout(connect, 5000)
+        reconnectTimer = setTimeout(connect, retryDelay)
+        retryDelay = 5000
         get('device_status').innerText = 'Waiting for rethink connection...'
     }
 
     ws.onopen = () => {
+        retryDelay = 250
         get('device_status').innerText = 'offline'
     }
 
@@ -69,6 +85,12 @@ function connect() {
         }
     }
 }
+
+// Same as the panel, and for the same reason its readyState check had to go: the restored socket can
+// still read as OPEN here and only report its close afterwards.
+window.addEventListener('pageshow', (ev) => {
+    if (ev.persisted) connect()
+})
 
 function pushMessage(direction, payload, injected) {
     const timestamp = document.createElement('span')
