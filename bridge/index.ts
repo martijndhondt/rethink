@@ -93,12 +93,22 @@ class BridgedDevice {
 type BridgeEvents = {
     loggedIn: () => void
     loggedOut: () => void
+    namesChanged: () => void
     started: (id: string) => void
     stopped: (id: string) => void
 }
 
 export class Bridge extends TypedEmitter<BridgeEvents> {
     bridgedDevices = new Map<string, BridgedDevice>()
+
+    /*
+     * What the owner calls each appliance, from the ThinQ account - the same names the app shows.
+     *
+     * rethink knows a device by its id and its model, which is enough to talk to it and useless for
+     * telling four identical ceiling cassettes apart. The account already holds the answer; it was
+     * only ever read while registering a device (see registrationPlan), so it never reached the panel.
+     */
+    deviceNames = new Map<string, string>()
 
     constructor(
         readonly state: BridgeState,
@@ -108,6 +118,45 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
         this.manager.on('newDevice', this.#start.bind(this))
         this.manager.on('dropDevice', this.#stop.bind(this))
         Object.values(this.manager.allDevices).forEach(this.#start.bind(this))
+    }
+
+    name(id: string) {
+        return this.deviceNames.get(id)
+    }
+
+    /*
+     * Best-effort: the panel is perfectly usable without the names, so a cloud that will not answer
+     * costs a log line and nothing else. Logging out takes the same path - no credentials, no names.
+     *
+     * An existing `client` can be reused
+     */
+    async refreshNames(client?: ThinqClient) {
+        const creds = this.state.getCredentials()
+        if (!creds) return this.clearNames()
+
+        try {
+            if (!client) {
+                client = new ThinqClient(creds.env)
+                await client.auth(creds.refreshToken)
+            }
+
+            const devices = await client.listDevices()
+
+            // race against login/logout lost
+            if (this.state.getCredentials()?.refreshToken !== creds.refreshToken) return
+
+            this.deviceNames = new Map(devices.filter((dev) => dev.alias).map((dev) => [dev.deviceId, dev.alias]))
+            this.emit('namesChanged')
+        } catch (err) {
+            console.warn('Could not read the device names from the ThinQ account:', err)
+        }
+    }
+
+    clearNames() {
+        if (this.deviceNames.size === 0) return
+
+        this.deviceNames = new Map()
+        this.emit('namesChanged')
     }
 
     #start(dev: AnyDevice) {
@@ -138,25 +187,45 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
     }
 
     async enable(id: string, devType?: string, statusCallback?: StatusCallback) {
-        if (!this.isLoggedIn()) return false
-
         if (this.bridgedDevices.has(id)) return true
 
         const dev = this.manager.allDevices[id]
         if (!dev) return false
 
-        const clientDevice = await this.register(dev, devType, statusCallback)
+        const creds = this.state.getCredentials()
+        if (!creds) return false
+        const client = new ThinqClient(creds.env)
+        await client.auth(creds.refreshToken)
+
+        const clientDevice = await this.register(client, dev, devType, statusCallback)
         if (!clientDevice) return false
 
         const bridged = new BridgedDevice(clientDevice, dev)
         this.bridgedDevices.set(dev.id, bridged)
         this.emit('started', dev.id)
+        void this.refreshNames(client) // registering may have just given this appliance its name
         return true
     }
 
     disable(id: string) {
         this.state.setDeviceState(id, undefined)
         this.#stop(id)
+    }
+
+    // Fetches the modelJSON of a device that is registered with the ThinQ cloud, ie. one that
+    // bridge mode has been enabled for.
+    async getModelJson(id: string) {
+        const creds = this.state.getCredentials()
+        if (!creds) throw new Error('Not logged in')
+
+        const dev = this.manager.allDevices[id]
+        if (!dev) throw new Error('Unknown device')
+
+        if (!this.bridgedDevices.has(id)) throw new Error('Bridge mode is not enabled for this device')
+
+        const client = new ThinqClient(creds.env)
+        await client.auth(creds.refreshToken)
+        return { modelName: dev.meta.modelName, modelJson: await client.getModelJson(id, dev.meta.modelName) }
     }
 
     isLoggedIn() {
@@ -181,6 +250,8 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
                 env,
                 refreshToken: token.refreshToken,
             })
+
+            void this.refreshNames()
             this.emit('loggedIn')
             return true
         } catch (err) {
@@ -191,21 +262,16 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
     logout() {
         this.state.setCredentials(undefined)
         // FIXME? drop all devices
+        this.clearNames() // with the credentials gone, this clears the names
         this.emit('loggedOut')
     }
 
-    async register(device: AnyDevice, deviceType?: string, statusCallback?: StatusCallback) {
+    async register(client: ThinqClient, device: AnyDevice, deviceType?: string, statusCallback?: StatusCallback) {
         if (!statusCallback) statusCallback = () => {}
-
-        const creds = this.state.getCredentials()
-        if (!creds) throw new Error('Not logged in')
 
         if (!deviceType) deviceType = device.meta.deviceType
 
         if (!deviceType) throw new Error('Device type must be specified')
-
-        const client = new ThinqClient(creds.env)
-        await client.auth(creds.refreshToken)
 
         statusCallback('Removing device from home')
         await client.removeDevice(device.id)
