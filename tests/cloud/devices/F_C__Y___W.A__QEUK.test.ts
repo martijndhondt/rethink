@@ -11,45 +11,48 @@ const META: Metadata = { modelId: MODEL_ID, modelName: 'F_C__Y___W.A__QEUK', swV
 // Real packet captures from an F_C__Y___W.A__QEUK washer (A-gen UK front-loader).
 // Frame format: AA <total_len> 20 EC <payload...> <checksum> BB (62-byte 0xEC inner block = 66 bytes total).
 // Confirmed offsets — see device file header.
+//
+// The 62-byte 0xEC payload is two back-to-back 30-byte records, [old][new]: record 2 (the
+// second half) is always the live/current state, record 1 is what record 2 was in the
+// *previous* packet. Every "real capture" fixture below is quoted verbatim from wire traffic;
+// the values asserted are what the corrected parser reads from record 2 (not necessarily
+// what an earlier, buggy reading of record 1 would have shown for the same bytes).
 
-// Real capture: Cotton/60°C/1400 RPM, 104 min remaining, 121 min initial, delay=0, tub_clean=10.
-// buf[18]=0x00 → steam=OFF.
+// Real capture: Cotton/60°C/1400 RPM, 103 min remaining, 121 min initial, delay=0, tub_clean=10.
 const SAMPLE_WASHING_EC = buf(
     'AA4220EC001C06012C02010100030A0601000000004000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
 )
 
-// Derived from SAMPLE_WASHING_EC with raw[20] (= buf[18]) changed 0x00→0x80 to set the steam flag.
-// All other fields identical: Cotton/60°C/1400 RPM, 104 min remaining, 121 min initial, delay=0.
+// Real capture (2026-08-02T05:35:56Z): Ready state, Cotton/60°C/1400 RPM, 220 min, steam=ON.
 const SAMPLE_STEAM_ON_EC = buf(
-    'AA4220EC001C06012C02010100030A0601000000804000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
+    'AA4220EC001C01033B033B0100030A0401000000000000000301002D003400000400001C01032803280100030A0601000000800000000401002D0034000004002ABB',
 )
 
-// Derived from SAMPLE_WASHING_EC with raw[20] (= buf[18]) changed 0x00→0x20 to set the wrinkle_care flag.
-// All other fields identical: Cotton/60°C/1400 RPM, 104 min remaining, initial=121 min, steam=OFF.
+// Synthetic: SAMPLE_WASHING_EC with record 2's steam/wrinkle_care byte (rec[16]) bit5 (0x20) set.
+// No real wrinkle_care-ON capture is available yet — the physical machine wasn't running this
+// setting during any of the sessions this codebase was developed against. Replace with a real
+// capture when one becomes available.
 const SAMPLE_WRINKLE_CARE_ON_EC = buf(
-    'AA4220EC001C06012C02010100030A0601000000204000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
+    'AA4220EC001C06012C02010100030A0601000000004000000306000A003400000500001C06012B02010100030A0601000000204000000306000A003400000500FEBB',
 )
 
-// Derived from SAMPLE_WASHING_EC with raw[21] (= buf[19]) changed 0x40→0xC0 to set the child_lock flag (bit7).
-// Real-capture confirmation: 2026-07-15T16:24 buf[19]=0xC0 observed immediately after user enabled child lock.
-// All other fields identical: Cotton/60°C/1400 RPM, 104 min remaining, initial=121 min, delay=0.
+// Synthetic: SAMPLE_WASHING_EC with record 2's active/child_lock byte (rec[17]) bit7 (0x80) set.
+// No real child-lock-engaged capture is available yet for the same reason as above.
 const SAMPLE_CHILD_LOCK_ON_EC = buf(
-    'AA4220EC001C06012C02010100030A060100000000C000000306000A003400000500001C06012B02010100030A0601000000004000000306000A003400000500FEBB',
+    'AA4220EC001C06012C02010100030A0601000000004000000306000A003400000500001C06012B02010100030A060100000000C000000306000A003400000500FEBB',
 )
 
-// Real capture: Ready state, Ease Care/40°C/1200 RPM, 59 min, remote_start=ON.
-// buf[9]=0x32 (bit1 set) — captured while machine was in Ready state with remote start enabled.
-// Section 1 shows this config; section 2 shows Cotton/60°C/1400/267 min (user was scrolling options).
+// Real capture: Ready state, Cotton/40°C/1000 RPM, 81 min, remote_start=ON (lock_status bit1 set).
 const SAMPLE_REMOTE_START_ON_EC = buf(
-    'AA4220EC001C01003B003B3200030904010000000100000001010030003400000000001C01041B041B0400030A0601000000000000000201003000340000020044BB',
+    'AA4220EC001C01003B003B3200030904010000000100000001010027003400000000001C01011501150700030704010000000000000002010027003400000300B9BB',
 )
 
-// Synthetic packet: Cotton/40°C/1400 RPM delayed-start, delay=4h, 72 min program, tub_clean=9.
+// Synthetic packet: Cotton/40°C/1400 RPM delayed-start, delay=4h, 71 min remaining, 72 min program, tub_clean=9.
 const SAMPLE_DELAYED_EC = buf(
     'AA4220EC001C03004800480100000A04010004000000000006030009003400000500001C03004700480100000A040100040000000000060300090034000005009BBB',
 )
 
-// Real capture: Cotton/60°C/1400 RPM, 3 min remaining (final spin), tub_clean=10.
+// Real capture: Cotton/60°C/1400 RPM, 2 min remaining (final spin), tub_clean=10.
 const SAMPLE_SPINNING_EC = buf(
     'AA4220EC001C08000302010100000A0000000000004000000608000A003400000500001C08000202010100000A0000000000004000000608000A003400000500D6BB',
 )
@@ -69,21 +72,24 @@ const SAMPLE_OFF_EC = buf(
 const SAMPLE_E2_IGNORED = buf('AA2420E2091C04032603260100030A0601000000400000000604000A003400000500B8BB')
 
 // Synthetic: 0xEB compact status packet (32-byte, sent after commands/reconnect).
-// Same field layout as the first section of 0xEC. Cotton/60°C/1400 RPM, 50 min remaining, tub_clean=10.
+// 0xEB carries a single record (no old/new pair) using the same relative layout as 0xEC's
+// current record. Cotton/60°C/1400 RPM, 50 min remaining, tub_clean=10.
 const SAMPLE_WASHING_EB = buf('AA2420EB001C06003200480100000A0601000000000000000606000A003400000500C4BB')
 
-// Real captures: 0xD8 door-state packets (3-byte).
-// 0x00 = door not machine-locked (accessible); non-zero = door machine-locked.
+// Real captures: 0xD8 door-state packets (3-byte). Unaffected by the old/new record split —
+// 0xD8 carries no such pair. 0x00 = door not machine-locked (accessible); non-zero = door
+// machine-locked.
 const SAMPLE_DOOR_UNLOCKED = buf('AA0720D800FCBB') // buf[2]=0x00 → not machine-locked → ON (Unlocked)
 const SAMPLE_DOOR_LOCKED = buf('AA0720D80BE1BB') //  buf[2]=0x0B → machine-locked → OFF (Locked)
 // Real capture from cycle start: buf[2]=0x30 → door sealed by machine → OFF (Locked)
 const SAMPLE_DOOR_LOCKED_0x30 = buf('AA0720D8308CBB')
 
 // Real capture: Error state — dE2 (door lock error), Cotton/60°C/1400 RPM, delay=7h, tub_clean=50.
-// buf[4]=0x12=Error, buf[10]=0x01=DE2, buf[23]=0x12=Error.
-// Captured 2026-08-02T19:42:33Z after machine failed to lock door during delayed-start attempt.
+// Captured 2026-08-02T19:42:30Z, three seconds before the machine's own status transitioned to
+// Error — this packet's record 2 (current) already shows Error while record 1 (previous) still
+// shows Measuring, which is itself part of the evidence for the old/new record ordering.
 const SAMPLE_ERROR_EC = buf(
-    'AA4220EC001C12031503150101030A06010007000000000004120032003400000400001C00031503150100000000000000000000000004010032003400000400FABB',
+    'AA4220EC001C04031503150100030A06010007000000000001040032003400000400001C12031503150101030A060100070000000000041200320034000004009BBB',
 )
 
 // Expected outgoing packets emitted by the device file.
@@ -143,7 +149,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.course, 'Cotton')
         assert.equal(props.spin, 1400)
         assert.equal(props.temp, 40)
-        assert.equal(props.remaining_time, 72) // 0h 72m
+        assert.equal(props.remaining_time, 71)
         assert.equal(props.initial_time, 72)
         assert.equal(props.delay_remaining, 4 * 60) // 4h 0m
         assert.equal(props.remote_start, 'OFF')
@@ -162,7 +168,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.course, 'Cotton')
         assert.equal(props.spin, 1400)
         assert.equal(props.temp, 60)
-        assert.equal(props.remaining_time, 1 * 60 + 44) // 1h 44m = 104 min
+        assert.equal(props.remaining_time, 1 * 60 + 43) // 1h 43m = 103 min
         assert.equal(props.initial_time, 2 * 60 + 1) // 2h 1m = 121 min
         assert.equal(props.delay_remaining, 0)
         assert.equal(props.remote_start, 'OFF')
@@ -180,7 +186,7 @@ describe(MODEL_ID, () => {
         thinq.emit('data', SAMPLE_SPINNING_EC)
         const props = ha.devices[DEVICE_ID].properties
         assert.equal(props.status, 'Spinning')
-        assert.equal(props.remaining_time, 3)
+        assert.equal(props.remaining_time, 2)
         assert.equal(props.spin, 1400) // spin index still populated during final spin
     })
 
@@ -199,22 +205,22 @@ describe(MODEL_ID, () => {
         assert.equal(props.tub_clean, 10)
     })
 
-    test('steam=OFF when buf[18] bit7 is clear (standard washing packet)', () => {
+    test('steam=OFF when rec[16] bit7 is clear (standard washing packet)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.steam, 'OFF')
     })
 
-    test('steam=ON when buf[18] bit7 is set', () => {
+    test('steam=ON (real capture, Ready state)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_STEAM_ON_EC)
         const props = ha.devices[DEVICE_ID].properties
         assert.equal(props.steam, 'ON')
-        // All other fields identical to SAMPLE_WASHING_EC
-        assert.equal(props.status, 'Washing')
+        assert.equal(props.status, 'Ready')
         assert.equal(props.temp, 60)
         assert.equal(props.spin, 1400)
-        assert.equal(props.remaining_time, 104)
+        assert.equal(props.remaining_time, 220)
+        assert.equal(props.wrinkle_care, 'OFF')
     })
 
     test('steam toggles correctly across ON→OFF sequence', () => {
@@ -225,13 +231,13 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.steam, 'OFF')
     })
 
-    test('wrinkle_care=OFF when buf[18] bit5 is clear (standard washing packet)', () => {
+    test('wrinkle_care=OFF when rec[16] bit5 is clear (standard washing packet)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'OFF')
     })
 
-    test('wrinkle_care=ON when buf[18] bit5 is set', () => {
+    test('wrinkle_care=ON when rec[16] bit5 is set (synthetic)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WRINKLE_CARE_ON_EC)
         const props = ha.devices[DEVICE_ID].properties
@@ -251,13 +257,13 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'OFF')
     })
 
-    test('child_lock=ON (Unlocked) when buf[19] bit7 is clear (disengaged)', () => {
+    test('child_lock=ON (Unlocked) when rec[17] bit7 is clear (disengaged)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'ON')
     })
 
-    test('child_lock=OFF (Locked) when buf[19] bit7 is set (engaged)', () => {
+    test('child_lock=OFF (Locked) when rec[17] bit7 is set (engaged, synthetic)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_CHILD_LOCK_ON_EC)
         const props = ha.devices[DEVICE_ID].properties
@@ -266,7 +272,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.status, 'Washing')
         assert.equal(props.temp, 60)
         assert.equal(props.spin, 1400)
-        assert.equal(props.remaining_time, 104)
+        assert.equal(props.remaining_time, 103)
     })
 
     test('child_lock toggles correctly when engaged/disengaged', () => {
@@ -277,13 +283,13 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'ON') // disengaged → Unlocked → ON
     })
 
-    test('remote_start=OFF when buf[9] bit1 is clear (standard washing packet)', () => {
+    test('remote_start=OFF when rec[7] bit1 is clear (standard washing packet)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.remote_start, 'OFF')
     })
 
-    test('remote_start=ON when buf[9] bit1 is set (real capture, Ready state)', () => {
+    test('remote_start=ON when rec[7] bit1 is set (real capture, Ready state)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_REMOTE_START_ON_EC)
         const props = ha.devices[DEVICE_ID].properties
@@ -291,10 +297,10 @@ describe(MODEL_ID, () => {
         // Verify other fields decoded correctly from this packet
         assert.equal(props.status, 'Ready')
         assert.equal(props.course, 'Cotton')
-        assert.equal(props.spin, 1200) // SPINS[9]
+        assert.equal(props.spin, 1000) // SPINS[7]
         assert.equal(props.temp, 40)
-        assert.equal(props.remaining_time, 59)
-        assert.equal(props.initial_time, 59)
+        assert.equal(props.remaining_time, 81)
+        assert.equal(props.initial_time, 81)
         assert.equal(props.steam, 'OFF')
         assert.equal(props.wrinkle_care, 'OFF')
         assert.equal(props.active, 'OFF')
@@ -304,11 +310,11 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_REMOTE_START_ON_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.remote_start, 'ON')
-        thinq.emit('data', SAMPLE_DELAYED_EC) // buf[9]=0x01 → bit1=0 → OFF
+        thinq.emit('data', SAMPLE_DELAYED_EC) // rec[7]=0x01 → bit1=0 → OFF
         assert.equal(ha.devices[DEVICE_ID].properties.remote_start, 'OFF')
     })
 
-    test('off state: power=OFF, status=Off, pre_state retains last run state (End)', () => {
+    test('off state: power=OFF, status=Off, pre_state (real capture)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_OFF_EC)
         const props = ha.devices[DEVICE_ID].properties
@@ -316,10 +322,10 @@ describe(MODEL_ID, () => {
         assert.equal(props.status, 'Off')
         assert.equal(props.active, 'OFF')
         assert.equal(props.door_lock, 'ON') // derived from status: Off → unlocked → ON
-        assert.equal(props.pre_state, 'End') // buf[23] retains End even after power-off
+        assert.equal(props.pre_state, 'Off') // by this capture, pre_state had already caught up to Off
     })
 
-    test('0xEB compact packet is parsed identically to 0xEC first section', () => {
+    test('0xEB compact packet is parsed identically to 0xEC current record', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EB)
         const props = ha.devices[DEVICE_ID].properties
@@ -452,7 +458,7 @@ describe(MODEL_ID, () => {
         assert.equal(thinq.outbox.length, 0)
     })
 
-    test('error=OFF, error_message=OK when buf[10]=0x00 (no error, standard washing packet)', () => {
+    test('error=OFF, error_message=OK when rec[8]=0x00 (no error, standard washing packet)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EC)
         const props = ha.devices[DEVICE_ID].properties
@@ -460,7 +466,7 @@ describe(MODEL_ID, () => {
         assert.equal(props.error_message, 'OK')
     })
 
-    test('error=ON, error_message=DE2 when buf[10]=0x01 (dE2 door lock error, real capture)', () => {
+    test('error=ON, error_message=DE2 when rec[8]=0x01 (dE2 door lock error, real capture)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_ERROR_EC)
         const props = ha.devices[DEVICE_ID].properties
@@ -475,7 +481,7 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_ERROR_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.error, 'ON')
-        thinq.emit('data', SAMPLE_WASHING_EC) // buf[10]=0x00
+        thinq.emit('data', SAMPLE_WASHING_EC) // rec[8]=0x00
         assert.equal(ha.devices[DEVICE_ID].properties.error, 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.error_message, 'OK')
     })
