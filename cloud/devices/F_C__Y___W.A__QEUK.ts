@@ -210,9 +210,12 @@ export default class Device extends AABBDevice {
     //   [14]    delay hours      — 4 confirmed
     //   [15]    delay minutes    — counts down 1/min confirmed
     //   [16]    bit7=steam       — 0x80=steam ON; confirmed via steam-toggle experiment
-    //           bit5=wrinkle_care — 0x20=wrinkle care ON; confirmed via toggle (+31 min to duration)
     //   [17]    bit6=active      — set once start is pressed; through Measuring/Delayed/Washing/Rinsing/Spinning/End
     //           bit7=child_lock  — confirmed via live capture 2026-07-15 (0xC0=active+child_lock ON, 0x40=active only)
+    //           bit5=wrinkle_care — 0x20=wrinkle care ON; confirmed via live capture 2026-09-04 (0x60=active+wrinkle
+    //                            care ON for the whole cycle, vs 0x40=active only on an otherwise identical wash).
+    //                            NOT byte [16] bit5, despite steam living in that byte — the two settings sit in
+    //                            different bytes on this model.
     //   [20]    unknown          — varies; 0x03 in Off/Washing, 0x06 in Delayed/Spinning/End
     //   [21]    pre_state        — last run state; mirrors status during active cycle;
     //                            retains last state after power-off (e.g. End→Off transition shows End)
@@ -234,8 +237,8 @@ export default class Device extends AABBDevice {
         const delay_h = rec[14]
         const delay_m = rec[15]
         const steam = rec[16] & 0x80 // bit7: 0x80=steam ON
-        const wrinkle_care = rec[16] & 0x20 // bit5: 0x20=wrinkle care ON
         const active = rec[17] & 0x40 // bit6: program active (set once start pressed, through End)
+        const wrinkle_care = rec[17] & 0x20 // bit5: 0x20=wrinkle care ON
         const child_lock = rec[17] & 0x80 // bit7: child lock engaged
         const pre_state = rec[21]
         const tub_clean = rec[23]
