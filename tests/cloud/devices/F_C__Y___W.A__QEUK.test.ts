@@ -36,10 +36,10 @@ const SAMPLE_WRINKLE_CARE_ON_EC = buf(
     'AA4220EC001C06012C02010100030A0601000000004000000306000A003400000500001C06012B02010100030A0601000000204000000306000A003400000500FEBB',
 )
 
-// Synthetic: SAMPLE_WASHING_EC with record 2's active/child_lock byte (rec[17]) bit7 (0x80) set.
-// No real child-lock-engaged capture is available yet for the same reason as above.
+// Real capture (2026-09-04T08:44:30Z): Washing, Cotton/40°C/1400 RPM, 69 min, child_lock engaged
+// (record 2's rec[17]=0xC0: active bit + child_lock bit both set).
 const SAMPLE_CHILD_LOCK_ON_EC = buf(
-    'AA4220EC001C06012C02010100030A0601000000004000000306000A003400000500001C06012B02010100030A060100000000C000000306000A003400000500FEBB',
+    'AA4220EC001C060109010C0100030A04010000000040000001060023003400000400001C060109010C0100030A040100000000C000000106002300340000040001BB',
 )
 
 // Real capture: Ready state, Cotton/40°C/1000 RPM, 81 min, remote_start=ON (lock_status bit1 set).
@@ -263,16 +263,16 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'ON')
     })
 
-    test('child_lock=OFF (Locked) when rec[17] bit7 is set (engaged, synthetic)', () => {
+    test('child_lock=OFF (Locked) when rec[17] bit7 is set (engaged, real capture)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_CHILD_LOCK_ON_EC)
         const props = ha.devices[DEVICE_ID].properties
         assert.equal(props.child_lock, 'OFF')
-        // All other fields identical to SAMPLE_WASHING_EC
         assert.equal(props.status, 'Washing')
-        assert.equal(props.temp, 60)
+        assert.equal(props.temp, 40)
         assert.equal(props.spin, 1400)
-        assert.equal(props.remaining_time, 103)
+        assert.equal(props.remaining_time, 69)
+        assert.equal(props.active, 'ON')
     })
 
     test('child_lock toggles correctly when engaged/disengaged', () => {
