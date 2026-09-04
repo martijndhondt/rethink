@@ -56,11 +56,22 @@ class DeviceEntry {
         const children = []
 
         let td
+        // The owner's own name for the appliance, which only the bridge can know. Without it four
+        // identical ceiling cassettes are four rows of the same model and a different UUID.
         td = document.createElement('td')
-        td.innerText = this.id
+        td.className = 'dev-name'
+        td.innerText = this.remoteState.name || '—'
+        td.title = this.remoteState.name || '' // the cell is cut off on a narrow screen
         children.push(td)
 
         td = document.createElement('td')
+        td.className = 'dev-id'
+        td.innerText = this.id
+        td.title = this.id
+        children.push(td)
+
+        td = document.createElement('td')
+        td.className = 'dev-model'
         let model = this.remoteState.model
         if (!this.remoteState.mapped) {
             model += ` <i class="material-icons tooltipped tiny" data-position="bottom" data-tooltip="This device is not supported by rethink. It will not be mapped to HomeAssistant">warning</i>`
@@ -69,12 +80,14 @@ class DeviceEntry {
         children.push(td)
 
         td = document.createElement('td')
+        td.className = 'dev-platform'
         td.innerText = this.remoteState.platform
         children.push(td)
 
+        // The width lives in the stylesheet now: on a narrow screen this cell moves out of the
+        // column layout entirely, and a fixed width there would push the row wide again.
         td = document.createElement('td')
-        td.style = 'width: 10em'
-
+        td.className = 'dev-bridge'
         td.innerHTML = `
             <div class="switch">
                 <label>Off <input type="checkbox"> <span class="lever"></span>On</label>
@@ -141,8 +154,21 @@ class DeviceEntry {
         }
 
         td = document.createElement('td')
-        td.innerHTML = `<a class="btn waves-effect waves-light" href="monitor?id=${this.id}"><i class="material-icons">troubleshoot</i></a>`
+        // Materialize disables a button with pointer-events: none, which would swallow the hover
+        // that opens its tooltip - so the tooltip lives on a wrapper instead of on the button.
+        td.className = 'dev-actions'
+        td.innerHTML = `
+            <span class="tooltipped" style="display: inline-block" data-position="bottom" data-tooltip="Monitor">
+                <a class="btn waves-effect waves-light" href="monitor?id=${this.id}"><i class="material-icons">troubleshoot</i></a>
+            </span>
+            <span class="tooltipped" style="display: inline-block" data-position="bottom"
+                data-tooltip="Download the modelJSON file. Requires bridge mode.">
+                <a class="btn waves-effect waves-light"><i class="material-icons">description</i></a>
+            </span>`
         children.push(td)
+
+        this.modelJsonButton = td.getElementsByTagName('a')[1]
+        this.modelJsonButton.onclick = () => this.downloadModelJson()
 
         this.row.replaceChildren(...children)
         Array.from(this.row.getElementsByClassName('tooltipped')).forEach((e) => M.Tooltip.init(e))
@@ -168,6 +194,36 @@ class DeviceEntry {
         // Materialize greys out a switch from the disabled attribute, not from a class, so setting
         // a class left the switch live while logged out - clicking it just produced an HTTP 400.
         this.bridgeSwitch.disabled = !bridge_status
+
+        // the modelJSON only comes from the ThinQ cloud, and only for a device registered there
+        this.modelJsonButton.classList.toggle('disabled', !(bridge_status && this.remoteState.bridged))
+    }
+
+    // The modelJSON is fetched by rethink and handed over as a blob, so that a failure shows up as a
+    // toast instead of navigating the panel away to an error page.
+    async downloadModelJson() {
+        if (this.modelJsonButton.classList.contains('disabled') || this.modelJsonBusy) return
+
+        this.modelJsonBusy = true
+        try {
+            const response = await fetch(`${baseUrl}bridge/${this.id}/modeljson`)
+            if (response.status >= 300) {
+                M.toast({ html: `HTTP error ${response.status}: ${await response.text()}` })
+                return
+            }
+
+            const match = /filename="([^"]*)"/.exec(response.headers.get('content-disposition') ?? '')
+            const url = URL.createObjectURL(await response.blob())
+            const link = document.createElement('a')
+            link.href = url
+            link.download = match ? match[1] : `${this.id}.json`
+            link.click()
+            URL.revokeObjectURL(url)
+        } catch (err) {
+            M.toast({ html: `FETCH error: ${err}` })
+        } finally {
+            this.modelJsonBusy = false
+        }
     }
 }
 
@@ -222,6 +278,12 @@ function connect() {
                     if (!devices[id]) devices[id] = new DeviceEntry(id, j, get('devices_body'))
                     else devices[id].update(j)
                 }
+
+                // Only the bridge knows the names, and only when a ThinQ account is linked. Decided
+                // over the whole list rather than per row: the column either says something about
+                // these appliances or it says nothing about any of them.
+                const named = Object.values(devices).some((dev) => dev.remoteState.name)
+                get('devices_table').classList.toggle('no-names', !named)
             }
 
             if (typeof json.bridge === 'object') {
