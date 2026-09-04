@@ -28,12 +28,13 @@ const SAMPLE_STEAM_ON_EC = buf(
     'AA4220EC001C01033B033B0100030A0401000000000000000301002D003400000400001C01032803280100030A0601000000800000000401002D0034000004002ABB',
 )
 
-// Synthetic: SAMPLE_WASHING_EC with record 2's steam/wrinkle_care byte (rec[16]) bit5 (0x20) set.
-// No real wrinkle_care-ON capture is available yet — the physical machine wasn't running this
-// setting during any of the sessions this codebase was developed against. Replace with a real
-// capture when one becomes available.
+// Real capture (2026-09-04T12:07Z): Washing, Cotton/40°C/1400 RPM, 97 min, wrinkle_care ON.
+// Note: wrinkle_care lives in record 2's rec[17] bit5 (0x20, alongside active/child_lock), NOT
+// rec[16] bit5 as originally assumed — a same-model wash with only steam enabled has rec[16]
+// bit5 clear and steam still correctly in rec[16] bit7, while an otherwise identical wash without
+// wrinkle care has rec[17]=0x40 (active only) instead of 0x60 (active+wrinkle_care) here.
 const SAMPLE_WRINKLE_CARE_ON_EC = buf(
-    'AA4220EC001C06012C02010100030A0601000000004000000306000A003400000500001C06012B02010100030A0601000000204000000306000A003400000500FEBB',
+    'AA4220EC001C060126012B0100030A04010000000060000001060024003400000400001C060125012B0100030A04010000000060000001060024003400000400D8BB',
 )
 
 // Real capture (2026-09-04T08:44:30Z): Washing, Cotton/40°C/1400 RPM, 69 min, child_lock engaged
@@ -231,22 +232,22 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.steam, 'OFF')
     })
 
-    test('wrinkle_care=OFF when rec[16] bit5 is clear (standard washing packet)', () => {
+    test('wrinkle_care=OFF when rec[17] bit5 is clear (standard washing packet)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WASHING_EC)
         assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'OFF')
     })
 
-    test('wrinkle_care=ON when rec[16] bit5 is set (synthetic)', () => {
+    test('wrinkle_care=ON when rec[17] bit5 is set (real capture)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', SAMPLE_WRINKLE_CARE_ON_EC)
         const props = ha.devices[DEVICE_ID].properties
         assert.equal(props.wrinkle_care, 'ON')
-        // steam is still OFF (bit7 clear), other fields unchanged
         assert.equal(props.steam, 'OFF')
         assert.equal(props.status, 'Washing')
-        assert.equal(props.temp, 60)
+        assert.equal(props.temp, 40)
         assert.equal(props.spin, 1400)
+        assert.equal(props.active, 'ON')
     })
 
     test('wrinkle_care toggles correctly across ON→OFF sequence', () => {
